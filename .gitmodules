@@ -1,3 +1,6 @@
-[submodule "game"]
+[submodule "super_mario"]
+	path = game/super_mario
+	url = git@github.com:Spina02/super-mario-python.git
+[submodule "game/super_mario"]
 	path = game/super_mario
 	url = git@github.com:Spina02/super-mario-python.git

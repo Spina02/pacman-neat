@@ -39,7 +39,7 @@ class GameEngine:
         self.max_frame_rate = 60
 
         # Inizializza gli oggetti del gioco
-        self.dashboard = Dashboard("./img/font.png", 8, self.screen)
+        self.dashboard = Dashboard(os.path.join(super_mario_path, "img", "font.png"), 8, self.screen)
         self.sound = Sound()
         self.level = Level(self.screen, self.sound, self.dashboard)
         self.menu = Menu(self.screen, self.dashboard, self.level, self.sound)

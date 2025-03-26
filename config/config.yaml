@@ -1,0 +1,12 @@
+# config/config.yaml
+PACMAN_SPEED: 6            # ad esempio, aumentiamo la velocità per ridurre i tempi di allenamento
+GHOST_SPEED_FAST: 7
+GHOST_SPEED_SLOW: 3
+GHOST_NORMAL_DELAY: 3000
+GHOST_DELAYS:
+  inky: 6000
+  pinky: 4000
+  blinky: 2000
+  clyde: 8000
+  blue: 0
+HEADLESS_MODE: true

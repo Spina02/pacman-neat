@@ -1,0 +1,3 @@
+[submodule "game/pacman"]
+	path = game/pacman
+	url = git@github.com:Spina02/PyPacman.git

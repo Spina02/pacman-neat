@@ -44,6 +44,23 @@ class PacmanEnvironment:
         self.action_size = config["game"]["action_size"]
         self.render_enabled = config["game"]["render"]
         
+    def check_frame_events(self):
+        """Check for events that should happen based on frame count rather than real time"""
+        # Check for ghost mode changes
+        if self.game_state.mode_timer < 0:
+            # Time to change modes
+            next_mode = 'scatter' if self.game_state.ghost_mode == 'chase' else 'chase'
+            self.game_state.ghost_mode = next_mode
+            # Update the start time for the next mode
+            self.game_state.mode_timer = self.game_state.mode_change_events * self.game_state.fps
+            print(f"\n\nchanging mode to {next_mode} for {self.game_state.mode_timer} frames\n\n")
+
+        # Check for power-up expiration
+        if self.game_state.is_pacman_powered:
+            power_duration = self.game_state.scared_time
+            if self.game_state.step_count >= self.game_state.power_event_trigger_time + power_duration:
+                self.game_state.is_pacman_powered = False
+        
     #?--------------------------------------------------------------
     #?                    Initialization functions
     #?--------------------------------------------------------------
@@ -64,7 +81,7 @@ class PacmanEnvironment:
             self.screen = pygame.display.set_mode((1024, 768))
             
         self.game_state = GameState()
-        self.game_state.mode_change_events = [7, 7, 5, 20]
+        self.game_state.sound_enabled = False
         
         # Create the screen surface based on render mode
         if not self.render_enabled:
@@ -120,7 +137,9 @@ class PacmanEnvironment:
         #? replication of "GameRun.main()" loop but only for 1 iteration
 
         for event in pygame.event.get():
-            self.event_handler.handle_events(event)
+            self.event_handler.handle_events(event, manual=False)
+        
+        self.check_frame_events()
 
         # If rendering, fill the screen, draw, etc.
         if self.render_enabled:
@@ -149,7 +168,8 @@ class PacmanEnvironment:
         if self.render_enabled:
             pygame.display.flip()
             
-        time.sleep(0.01)
+        # Update the step count
+        self.game_state._step_count += 1
 
         return obs, reward, done, info
 
@@ -313,17 +333,17 @@ class PacmanEnvironment:
         pygame.quit()
 
 if __name__ == "__main__":
-    config = { "game": { "observation_size": 10,
+    config = { "game": { "observation_size": 19,
                         "action_size": 4,
                         "render": True
                         } }
 
     # Create the environment
     env = PacmanEnvironment(config)
+    # Initialize the environment
     obs = env.reset()
     print("Initial observation:")
-    for row in obs:
-        print(row)
+    print(obs)
         
     MANUAL = True
         
@@ -335,17 +355,15 @@ if __name__ == "__main__":
             action = np.random.randint(config["game"]["action_size"])
             obs, reward, done, info = env.step(action)
             #print(f"Step {step}: reward = {reward}, done = {done}")
-            for row in obs:
-                print(row)
+            print(obs)
             if done:
                 print("Episode finished at step", step)
                 break
-            # Slow down the loop [Optional]
-            time.sleep(0.01)
 
         env.close()
         pygame.quit()
         print("Test completed")
+        
     else:
         running = True
         action = None
@@ -371,14 +389,15 @@ if __name__ == "__main__":
             obs, reward, done, info = env.step(action)
             
             #! debug
-            print(obs)
+            #print(obs)
 
             if done:
                 print("Episode finished")
+                running = False
                 obs = env.reset()
                 action = None  # Resetta l'azione
-
-            time.sleep(0.01)
+                
+            time.sleep(1/60)  # Delay to control the speed of the game
 
         env.close()
         pygame.quit()

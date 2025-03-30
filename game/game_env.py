@@ -26,40 +26,23 @@ class PacmanEnvironment:
     returning observations and rewards, etc.
     """
 
-    def __init__(self, config):
+    def __init__(self, render):
         """
         Args:
             config (dict): Configuration dictionary loaded from YAML.
                            Should contain game settings (e.g. headless flag).
         """
-        self.config = config
         self.game_state = None
         self.screen = None
         self.event_handler = None
         self.all_sprites = None
         self.screen_manager = None
+        self.prev_points = 0
+        self.prev_pos = None
+        self.pos = None
 
         # Store observation/action dimensions for your NEAT usage
-        self.observation_size = config["game"]["observation_size"]
-        self.action_size = config["game"]["action_size"]
-        self.render_enabled = config["game"]["render"]
-        
-    def check_frame_events(self):
-        """Check for events that should happen based on frame count rather than real time"""
-        # Check for ghost mode changes
-        if self.game_state.mode_timer < 0:
-            # Time to change modes
-            next_mode = 'scatter' if self.game_state.ghost_mode == 'chase' else 'chase'
-            self.game_state.ghost_mode = next_mode
-            # Update the start time for the next mode
-            self.game_state.mode_timer = self.game_state.mode_change_events * self.game_state.fps
-            print(f"\n\nchanging mode to {next_mode} for {self.game_state.mode_timer} frames\n\n")
-
-        # Check for power-up expiration
-        if self.game_state.is_pacman_powered:
-            power_duration = self.game_state.scared_time
-            if self.game_state.step_count >= self.game_state.power_event_trigger_time + power_duration:
-                self.game_state.is_pacman_powered = False
+        self.render_enabled = render
         
     #?--------------------------------------------------------------
     #?                    Initialization functions
@@ -100,7 +83,10 @@ class PacmanEnvironment:
             print(f"Error initializing screen manager: {e}")
             # Try a fallback approach if there was an error
             
-        return self.get_observation()
+        obs = self.get_observation()
+        
+        self.pos = obs[:2]
+        return obs
     
     #?--------------------------------------------------------------
     #?                        Step function
@@ -139,7 +125,7 @@ class PacmanEnvironment:
         for event in pygame.event.get():
             self.event_handler.handle_events(event, manual=False)
         
-        self.check_frame_events()
+        self.event_handler.check_frame_events()
 
         # If rendering, fill the screen, draw, etc.
         if self.render_enabled:
@@ -193,11 +179,6 @@ class PacmanEnvironment:
             # (1) Convert Pacman's pixel position into grid coordinates.
             start_x, start_y = self.game_state.start_pos  # Ensure this is set by your level loading
             cell_size = CELL_SIZE[0]
-
-            # px, py = self.game_state.pacman_rect[:2]  # Pacman's top-left in pixels
-            # pacman_grid = np.array(
-            #     get_idx_from_coords(px, py, start_x, start_y, cell_size)
-            # )  # shape: (2,) => [row, col]
             
             px, py, pxx, pyy = self.game_state.pacman_rect
             pacman_grid = np.array(get_idx_from_coords(px, py, start_x, start_y, cell_size))
@@ -205,6 +186,9 @@ class PacmanEnvironment:
 
             # Normalize Pacman's position in [0,1] by (NUM_ROWS, NUM_COLS)
             pacman_pos = pacman_grid / np.array([NUM_ROWS, NUM_COLS])
+            
+            self.prev_pos = self.pos
+            self.pos = pacman_pos
 
             # (2) Convert ghost positions (in pixels) into grid coordinates and compute the relative difference.
             ghost_order = ['blinky', 'pinky', 'inky', 'clyde']
@@ -258,6 +242,9 @@ class PacmanEnvironment:
                     closest_powerup /= dist_powerup
                 else:
                     closest_powerup = np.array([0.0, 0.0])
+                    
+            # (5) Remaining dots
+            remaining_dots = [dots.size]
 
             # (5) Compute distances to the nearest wall in 4 directions (left, right, up, down)
             wall_code = self.game_state.tile_encoding.get("wall", 0)
@@ -310,9 +297,10 @@ class PacmanEnvironment:
                 ghost_rel,       # 8
                 closest_dot,     # 2
                 closest_powerup, # 2
+                remaining_dots,  # 1
                 wall_dists,      # 4
                 power_state      # 1
-            ])                   # tot = 19
+            ])                   # tot = 20
             
         return observation
               
@@ -324,7 +312,17 @@ class PacmanEnvironment:
         """
         # You can store self.prev_points and do reward = current_points - prev_points
         # Then update self.prev_points = current_points, etc.
-        return float(self.game_state.points)
+        reward = self.game_state.points - self.prev_points
+        self.prev_points = self.game_state.points
+        
+        # Check if Pacman is moving, if so, give a small negative reward
+        if self.prev_pos is not None and self.pos is not None:
+            dx = abs(self.pos[0] - self.prev_pos[0])
+            dy = abs(self.pos[1] - self.prev_pos[1])
+            if dx == 0 and dy == 0:
+                reward -= 1
+        
+        return reward # if reward > 0 else 1.0
 
     def close(self):
         """
@@ -332,72 +330,68 @@ class PacmanEnvironment:
         """
         pygame.quit()
 
-if __name__ == "__main__":
-    config = { "game": { "observation_size": 19,
-                        "action_size": 4,
-                        "render": True
-                        } }
+# if __name__ == "__main__":
+#     render = True
 
-    # Create the environment
-    env = PacmanEnvironment(config)
-    # Initialize the environment
-    obs = env.reset()
-    print("Initial observation:")
-    print(obs)
+#     # Create the environment
+#     env = PacmanEnvironment(render)
+#     # Initialize the environment
+#     obs = env.reset()
+#     print("Initial observation:")
+#     print(obs)
         
-    MANUAL = True
+#     MANUAL = True
         
-    if not MANUAL:
-        # Run a few steps
-        num_steps = 5000
-        for step in range(num_steps):
-            # random action in config["game"]["action_size"]
-            action = np.random.randint(config["game"]["action_size"])
-            obs, reward, done, info = env.step(action)
-            #print(f"Step {step}: reward = {reward}, done = {done}")
-            print(obs)
-            if done:
-                print("Episode finished at step", step)
-                break
+#     if not MANUAL:
+#         # Run a few steps
+#         num_steps = 5000
+#         for step in range(num_steps):
+#             action = np.random.randint(4)
+#             obs, reward, done, info = env.step(action)
+#             print(obs)
+#             if done:
+#                 print("Episode finished at step", step)
+#                 break
 
-        env.close()
-        pygame.quit()
-        print("Test completed")
+#         env.close()
+#         pygame.quit()
+#         print("Test completed")
         
-    else:
-        running = True
-        action = None
+#     else:
+#         running = True
+#         action = None
 
-        while running:
-            # Handle events
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_LEFT:
-                        action = 0  # sinistra
-                    elif event.key == pygame.K_RIGHT:
-                        action = 1  # destra
-                    elif event.key == pygame.K_UP:
-                        action = 2  # su
-                    elif event.key == pygame.K_DOWN:
-                        action = 3  # giù
+#         while running:
+#             # Handle events
+#             for event in pygame.event.get():
+#                 if event.type == pygame.QUIT:
+#                     running = False
+#                 elif event.type == pygame.KEYDOWN:
+#                     if event.key == pygame.K_LEFT:
+#                         action = 0  # sinistra
+#                     elif event.key == pygame.K_RIGHT:
+#                         action = 1  # destra
+#                     elif event.key == pygame.K_UP:
+#                         action = 2  # su
+#                     elif event.key == pygame.K_DOWN:
+#                         action = 3  # giù
 
-            if action is None:
-                continue
+#             if action is None:
+#                 continue
 
-            obs, reward, done, info = env.step(action)
+#             obs, reward, done, info = env.step(action)
             
-            #! debug
-            #print(obs)
+#             #! debug
+#             # print(obs)
+#             print(reward)
 
-            if done:
-                print("Episode finished")
-                running = False
-                obs = env.reset()
-                action = None  # Resetta l'azione
+#             if done:
+#                 print("Episode finished")
+#                 running = False
+#                 obs = env.reset()
+#                 action = None  # Resetta l'azione
                 
-            time.sleep(1/60)  # Delay to control the speed of the game
+#             time.sleep(1/60)  # Delay to control the speed of the game
 
-        env.close()
-        pygame.quit()
+#         env.close()
+#         pygame.quit()

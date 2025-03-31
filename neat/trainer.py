@@ -29,8 +29,8 @@ class Trainer:
         
         if resume_from:
             self.population = neat.Checkpointer.restore_checkpoint(resume_from)
-            self.gen = self.population.generation
-            print(f"Resuming from generation {self.gen}")
+
+            print(f"Resuming from generation {self.population.generation}")
         else:
             self.population = neat.Population(self.neat_config)
             # Solo se NON stai riprendendo da checkpoint
@@ -105,15 +105,24 @@ class Trainer:
         self._run(self.gen)
         
 if __name__ == "__main__":
+    TRAIN = 1
+    
     # check last checkpoint
     last_checkpoint = None
-    checkpoints = sorted([f for f in os.listdir(CHECKPOINT_DIR) if f.startswith('checkpoint-')], key=lambda x: int(x.split('-')[1]))
+    if not os.path.exists(CHECKPOINT_DIR):
+        checkpoints = []
+    else:
+        checkpoints = sorted([f for f in os.listdir(CHECKPOINT_DIR) if f.startswith('checkpoint-')], key=lambda x: int(x.split('-')[1]))
     if checkpoints:
         last_checkpoint = os.path.join(CHECKPOINT_DIR, checkpoints[-1])
         print(f"Resuming from checkpoint: {last_checkpoint}")
     else:
         print("No checkpoints found. Starting from scratch.")
 
-    t = Trainer(gen=100, cores = 15, resume_from=False, render=False)
+    if TRAIN:
+        t = Trainer(gen=1000, cores = 15, resume_from=last_checkpoint)
+    else:
+        t = Trainer(gen=1, cores = 1, resume_from=last_checkpoint, render=True)
+        
     t.main()
         

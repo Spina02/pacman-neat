@@ -5,7 +5,6 @@ import sys
 import numpy as np
 
 pacman_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "pacman"))
-print("Pacman path:", pacman_path)
 if pacman_path not in sys.path:
     sys.path.insert(0, pacman_path)
     
@@ -38,8 +37,12 @@ class PacmanEnvironment:
         self.all_sprites = None
         self.screen_manager = None
         self.prev_points = 0
-        self.prev_pos = None
-        self.pos = None
+        #self.prev_pos = None
+        #self.pos = None
+        self.stuck_counter = 0
+        self.prev_dist_to_closest_dot = float('inf')
+        self.prev_dist_to_closest_powerup = float('inf')
+
 
         # Store observation/action dimensions for your NEAT usage
         self.render_enabled = render
@@ -83,9 +86,15 @@ class PacmanEnvironment:
             print(f"Error initializing screen manager: {e}")
             # Try a fallback approach if there was an error
             
+        self.all_sprites.update(0)
+            
         obs = self.get_observation()
         
-        self.pos = obs[:2]
+        #self.prev_pos = self.game_state.pacman_rect[:2]
+        #self.pos = self.game_state.pacman_rect[:2]
+        
+        self.last_action_stuck = False 
+        
         return obs
     
     #?--------------------------------------------------------------
@@ -103,6 +112,8 @@ class PacmanEnvironment:
             done (bool)
             info (dict)
         """
+        current_points = self.game_state.points
+        
         # 1) Translate action integer into game_state.direction
         #    For instance:
         if action == 0:
@@ -114,7 +125,8 @@ class PacmanEnvironment:
         elif action == 3:
             self.game_state.direction = "d"
         else:
-            self.game_state.direction = ""
+            print("Invalid action:", action)
+            #self.game_state.direction = ""
 
         # 2) Update one frame
         reward = 0.0
@@ -137,15 +149,18 @@ class PacmanEnvironment:
         dt = 1
         self.all_sprites.update(dt)
 
-        # Gather the immediate reward
-        reward = self.calculate_reward()
-
         # Determine if done
         if self.game_state.is_pacman_dead or self.game_state.level_complete:
             done = True
 
+        obs = self.get_observation() # Osservazione *dopo* lo step
+        done = self.game_state.is_pacman_dead or self.game_state.level_complete
+        reward = self.calculate_reward(current_points, obs, done)
+        
+        self.prev_points = self.game_state.points
+        
         # Construct next observation
-        obs = self.get_observation()
+        # obs = self.get_observation()
 
         # Info dict can hold debugging info if desired
         info = {}
@@ -187,8 +202,8 @@ class PacmanEnvironment:
             # Normalize Pacman's position in [0,1] by (NUM_ROWS, NUM_COLS)
             pacman_pos = pacman_grid / np.array([NUM_ROWS, NUM_COLS])
             
-            self.prev_pos = self.pos
-            self.pos = pacman_pos
+            #self.prev_pos = self.pos
+            #self.pos = px, py
 
             # (2) Convert ghost positions (in pixels) into grid coordinates and compute the relative difference.
             ghost_order = ['blinky', 'pinky', 'inky', 'clyde']
@@ -303,26 +318,65 @@ class PacmanEnvironment:
             ])                   # tot = 20
             
         return observation
-              
-    def calculate_reward(self):
-        """
-        Return a scalar reward each step. 
-        Common approach: difference in `game_state.points` 
-        from previous frame to current frame.
-        """
-        # You can store self.prev_points and do reward = current_points - prev_points
-        # Then update self.prev_points = current_points, etc.
-        reward = self.game_state.points - self.prev_points
-        self.prev_points = self.game_state.points
+    
+    def calculate_reward(self, previous_points, current_observation, done):
+        reward = 0.0
+
+        # 1. Reward for Points Gained
+        points_gain = self.game_state.points - previous_points
+        if points_gain > 0:
+            reward += points_gain * 2 # e.g. +10 dot, +15 powerup, +25 ghost
+        else:
+            reward -= 0.1 # penalty for not eating anything
+
+        # 2. Penalty for Pacman Death
+        if self.game_state.is_pacman_dead:
+            # penalty proportional to remaining dots (higher penalty if less dots left)
+            reward -= 700.0 - current_observation[10]
+
+        # 3. Bonus for Level Completion
+        if self.game_state.level_complete:
+            reward += 500.0
+            
+        # map direction to wall check
+        dir_decode = { "l": 0, "r": 1, "u": 2, "d": 3 }
+         
+        # get wall distances from observation
+        wall_dists = current_observation[15:19]
+        wall_dist = wall_dists[dir_decode[self.game_state.direction]]
+        if wall_dist < 1e-3:
+            self.stuck_counter += 1
+            # If the wall is too close, penalize
+            reward -= 0.1 * self.stuck_counter
+        else:
+            self.stuck_counter = 0
+
+        # 5. Reward for Moving Closer to Dots
+        current_dot_vector = current_observation[10:12]
+        current_dist_to_dot = np.linalg.norm(current_dot_vector)
+        if current_dist_to_dot < self.prev_dist_to_closest_dot and not self.last_action_stuck:
+            reward += 0.5
+        self.prev_dist_to_closest_dot = current_dist_to_dot
         
-        # Check if Pacman is moving, if so, give a small negative reward
-        if self.prev_pos is not None and self.pos is not None:
-            dx = abs(self.pos[0] - self.prev_pos[0])
-            dy = abs(self.pos[1] - self.prev_pos[1])
-            if dx == 0 and dy == 0:
-                reward -= 1
-        
-        return reward # if reward > 0 else 1.0
+        #! Reward getting close to powerups (?)
+        # current_powerup_vector = current_observation[12:14]
+        # current_dist_to_powerup = np.linalg.norm(current_powerup_vector)
+        # if current_dist_to_powerup < self.prev_dist_to_closest_powerup and not self.last_action_stuck:
+        #     reward += 1
+        # self.prev_dist_to_closest_powerup = current_dist_to_powerup
+
+        # 6. Penalty for getting too close to ghosts
+        ghost_relative_positions = current_observation[2:10] # 4 ghosts * 2 coords
+        #is_powered_up = current_observation[-1] > 0.5
+        if not current_observation[-1]:
+            min_dist_to_ghost = float('inf')
+            for i in range(0, 8, 2):
+                dist = np.linalg.norm(ghost_relative_positions[i:i+2])
+                min_dist_to_ghost = min(min_dist_to_ghost, dist)
+            if min_dist_to_ghost < 0.1: # Too close to a ghost
+                reward -= 2.0
+
+        return reward
 
     def close(self):
         """
@@ -330,68 +384,72 @@ class PacmanEnvironment:
         """
         pygame.quit()
 
-# if __name__ == "__main__":
-#     render = True
+if __name__ == "__main__":
+    render = True
 
-#     # Create the environment
-#     env = PacmanEnvironment(render)
-#     # Initialize the environment
-#     obs = env.reset()
-#     print("Initial observation:")
-#     print(obs)
+    # Create the environment
+    env = PacmanEnvironment(render)
+    # Initialize the environment
+    obs = env.reset()
+    print("Initial observation:")
+    print(obs)
         
-#     MANUAL = True
+    MANUAL = True
         
-#     if not MANUAL:
-#         # Run a few steps
-#         num_steps = 5000
-#         for step in range(num_steps):
-#             action = np.random.randint(4)
-#             obs, reward, done, info = env.step(action)
-#             print(obs)
-#             if done:
-#                 print("Episode finished at step", step)
-#                 break
+    if not MANUAL:
+        # Run a few steps
+        num_steps = 5000
+        for step in range(num_steps):
+            action = np.random.randint(4)
+            obs, reward, done, info = env.step(action)
+            print(obs)
+            if done:
+                print("Episode finished at step", step)
+                break
 
-#         env.close()
-#         pygame.quit()
-#         print("Test completed")
+        env.close()
+        pygame.quit()
+        print("Test completed")
         
-#     else:
-#         running = True
-#         action = None
+    else:
+        running = True
+        action = None
+        
+        total_reward = 0.0
 
-#         while running:
-#             # Handle events
-#             for event in pygame.event.get():
-#                 if event.type == pygame.QUIT:
-#                     running = False
-#                 elif event.type == pygame.KEYDOWN:
-#                     if event.key == pygame.K_LEFT:
-#                         action = 0  # sinistra
-#                     elif event.key == pygame.K_RIGHT:
-#                         action = 1  # destra
-#                     elif event.key == pygame.K_UP:
-#                         action = 2  # su
-#                     elif event.key == pygame.K_DOWN:
-#                         action = 3  # giù
+        while running:
+            # Handle events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_LEFT:
+                        action = 0  # sinistra
+                    elif event.key == pygame.K_RIGHT:
+                        action = 1  # destra
+                    elif event.key == pygame.K_UP:
+                        action = 2  # su
+                    elif event.key == pygame.K_DOWN:
+                        action = 3  # giù
 
-#             if action is None:
-#                 continue
+            if action is None:
+                continue
 
-#             obs, reward, done, info = env.step(action)
+            obs, reward, done, info = env.step(action)
             
-#             #! debug
-#             # print(obs)
-#             print(reward)
+            total_reward += reward
+            
+            #! debug
+            # print(obs)
+            print(total_reward)
 
-#             if done:
-#                 print("Episode finished")
-#                 running = False
-#                 obs = env.reset()
-#                 action = None  # Resetta l'azione
+            if done:
+                print("Episode finished")
+                running = False
+                obs = env.reset()
+                action = None  # Resetta l'azione
                 
-#             time.sleep(1/60)  # Delay to control the speed of the game
+            time.sleep(1/60)  # Delay to control the speed of the game
 
-#         env.close()
-#         pygame.quit()
+        env.close()
+        pygame.quit()

@@ -332,7 +332,7 @@ class PacmanEnvironment:
         # 2. Penalty for Pacman Death
         if self.game_state.is_pacman_dead:
             # penalty proportional to remaining dots (higher penalty if less dots left)
-            reward -= 700.0 - current_observation[10]
+            reward -= 500.0
 
         # 3. Bonus for Level Completion
         if self.game_state.level_complete:

@@ -1,6 +1,6 @@
 [NEAT]
 fitness_criterion     = max
-fitness_threshold     = 1000
+fitness_threshold     = 10000
 pop_size              = 300
 reset_on_extinction   = True
 
@@ -8,7 +8,7 @@ reset_on_extinction   = True
 # node activation options
 activation_default      = relu
 activation_mutate_rate  = 0.01
-activation_options      = relu
+activation_options      = relu sigmoid
 
 # node aggregation options
 aggregation_default     = sum
@@ -44,9 +44,9 @@ node_add_prob           = 0.25
 node_delete_prob        = 0.1
 
 # network parameters
-num_inputs              = 20
+num_inputs              = 24
 num_outputs             = 4
-num_hidden              = 20
+num_hidden              = 0
 
 # connection weight options
 weight_init_mean        = 0.0
@@ -54,7 +54,7 @@ weight_init_stdev       = 1.0
 weight_max_value        = 30
 weight_min_value        = -30
 weight_mutate_power     = 0.5
-weight_mutate_rate      = 0.3
+weight_mutate_rate      = 0.4
 weight_replace_rate     = 0.0245
 
 # node response options
@@ -67,7 +67,7 @@ response_mutate_rate    = 0.1
 response_replace_rate   = 0.0
 
 [DefaultSpeciesSet]
-compatibility_threshold = 2.5
+compatibility_threshold = 2
 
 [DefaultStagnation]
 species_fitness_func = mean

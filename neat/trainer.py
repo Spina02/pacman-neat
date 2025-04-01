@@ -16,6 +16,7 @@ CHECKPOINT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", '
 # It accepts a tuple (genome_id, genome, config, render) and returns (genome_id, total_reward)
 def evaluate_genome(args):
     genome_id, genome, config, render = args
+    env = None
     try:
         env = game.PacmanEnvironment(render)
         state = env.reset()
@@ -29,10 +30,12 @@ def evaluate_genome(args):
             state, reward, done, _ = env.step(action)
             total_reward += reward
             genome.fitness += reward
-        env.close()
     except Exception as e:
         print(f"Error in evaluating genome {genome_id}: {e}")
         total_reward = 0
+        if env:
+            env.close()
+        exit(-1)
     return (genome_id, total_reward)
 
 class Trainer:
@@ -102,7 +105,7 @@ if __name__ == "__main__":
         print("No checkpoints found. Starting from scratch.")
 
     if TRAIN:
-        t = Trainer(gen=1000, cores=16, resume_from=last_checkpoint)
+        t = Trainer(gen=1000, cores=15, resume_from=last_checkpoint)
     else:
         t = Trainer(gen=1, cores=1, resume_from=last_checkpoint, render=True)
     t.main()

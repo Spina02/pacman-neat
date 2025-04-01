@@ -33,8 +33,14 @@ class PacmanEnvironment:
         self.prev_points = 0
         self.stuck_counter = 0
         self.prev_dist_to_closest_dot = float('inf')
-        self.prev_dist_to_closest_powerup = float('inf')
         self.render_enabled = render
+        self.px = 0
+        self.py = 0
+        self.prev_px = 0
+        self.prev_py = 0
+        self.visits = None
+        self.last_action_stuck = False
+        self.stuck_counter = 0
         
     #?--------------------------------------------------------------
     #?                    Initialization functions
@@ -68,10 +74,11 @@ class PacmanEnvironment:
         self.screen_manager = ScreenManager(self.screen, self.game_state, self.all_sprites)
             
         self.all_sprites.update(0)
-            
-        obs = self.get_observation()
         
-        self.last_action_stuck = False 
+        rows, cols = self.game_state.level_matrix_np.shape
+        self.visits = np.zeros((rows, cols), dtype=int)
+        
+        obs = self.get_observation()
         
         return obs
     
@@ -128,9 +135,15 @@ class PacmanEnvironment:
         # Determine if done
         if self.game_state.is_pacman_dead or self.game_state.level_complete:
             done = True
-
+            
         obs = self.get_observation()
         done = self.game_state.is_pacman_dead or self.game_state.level_complete
+        
+        # Safety check
+        rows, cols = self.visits.shape
+        if 0 <= self.py < rows and 0 <= self.px < cols:
+            self.visits[self.py, self.px] += 1
+        
         reward = self.calculate_reward(current_points, obs, done)
         
         self.prev_points = self.game_state.points
@@ -168,14 +181,15 @@ class PacmanEnvironment:
             start_x, start_y = self.game_state.start_pos
             cell_size = CELL_SIZE[0]
             
-            px, py = self.game_state.pacman_rect[:2]
-            pacman_grid = np.array(get_idx_from_coords(px, py, start_x, start_y, cell_size))
+            self.px, self.py = self.game_state.pacman_rect[:2]
+            pacman_grid = np.array(get_idx_from_coords(self.px, self.py, start_x, start_y, cell_size))
+            self.px = int((self.px - start_x) / cell_size)
+            self.py = int((self.py - start_y) / cell_size)
             pacman_pos = pacman_grid / np.array([NUM_ROWS, NUM_COLS])
             
-            # (2) Convert ghost positions (in pixels) into grid coordinates and compute the relative difference.
+            # (2) Relative positions of ghosts
             ghost_order = ['blinky', 'pinky', 'inky', 'clyde']
             ghost_rel = np.zeros(8)  # 4 ghosts * 2 coords
-
             ghosts = self.game_state.ghosts  # dict: ghost_name -> (gx, gy) in pixels
             for i, name in enumerate(ghost_order):
                 if name in ghosts:
@@ -185,8 +199,11 @@ class PacmanEnvironment:
                     ghost_rel[i*2]     = rel_r
                     ghost_rel[i*2 + 1] = rel_c
                 # If the ghost doesn't exist or isn't placed, leave (0,0)
+
+            # (3) Ghost scared bits
+            ghost_scared_bits = np.array(self.game_state.scared_ghosts, dtype=int)
                 
-            # (3) Compute the vector to the nearest dot.
+            # (4) Compute the vector to the nearest dot.
             grid = self.game_state.level_matrix_np  # 2D array: 0=wall,1=dot,2=power...
             dot_code = self.game_state.tile_encoding.get("dot", 1)
 
@@ -200,7 +217,7 @@ class PacmanEnvironment:
             else:
                 closest_dot = np.array([0.0, 0.0])
                 
-            # (4) Nearest powerup (if any)
+            # (5) Nearest powerup (if any)
             powerup_code = self.game_state.tile_encoding.get("power", 2)
             powerup = np.argwhere(grid == powerup_code)
             if powerup.size > 0:
@@ -216,10 +233,10 @@ class PacmanEnvironment:
                 else:
                     closest_powerup = np.array([0.0, 0.0])
                     
-            # (5) Remaining dots
+            # (6) Remaining dots
             remaining_dots = [dots.size]
 
-            # (5) Compute distances to the nearest wall in 4 directions (left, right, up, down)
+            # (7) Compute distances to the nearest wall in 4 directions (left, right, up, down)
             wall_code = self.game_state.tile_encoding.get("wall", 0)
             r, c = pacman_grid.astype(int)
             max_rows, max_cols = grid.shape
@@ -258,19 +275,20 @@ class PacmanEnvironment:
             dist_down  = distance_to_wall(r, c, "down")
             wall_dists = np.array([dist_left, dist_right, dist_up, dist_down])
             
-            # (6) Pacman powerup status
+            # (8) Pacman powerup status
             power_state = np.array([1.0]) if self.game_state.is_pacman_powered else np.array([0.0])
 
             # Combine everything into one observation vector
             observation = np.concatenate([
-                pacman_pos,      # 2
-                ghost_rel,       # 8
-                closest_dot,     # 2
-                closest_powerup, # 2
-                remaining_dots,  # 1
-                wall_dists,      # 4
-                power_state      # 1
-            ])
+                pacman_pos,        # 2
+                ghost_rel,         # 8
+                ghost_scared_bits, # 4
+                closest_dot,       # 2
+                closest_powerup,   # 2
+                remaining_dots,    # 1
+                wall_dists,        # 4
+                power_state        # 1
+            ])                     # Total: 24 elements
             return observation
         else:
             # TODO: Implement other observation modes
@@ -324,8 +342,55 @@ class PacmanEnvironment:
                 min_dist_to_ghost = min(min_dist_to_ghost, dist)
             if min_dist_to_ghost < 0.1:
                 reward -= 2.0
+                
+        # Encourage exploration with tile visitation
+        visit_count = self.visits[int(self.py), int(self.px)]
+        if visit_count == 1:
+            # first time on this tile
+            reward += 0.1
+        elif visit_count == 2:
+            reward += 0.05
+
+        # If you want repeated visits to the same tile to be penalized:
+        # e.g. if visit_count > 10
+        if visit_count > 20:
+            reward -= 0.01 * (visit_count - 20)
 
         return reward
 
     def close(self):
         pygame.quit()
+        
+if __name__ == "__main__":
+    # Test the environment using the keyboard
+    env = PacmanEnvironment(render=True)
+    env.reset()
+    done = False
+    action = None
+    while not done:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                done = True
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT:
+                    action = 0
+                elif event.key == pygame.K_RIGHT:
+                    action = 1
+                elif event.key == pygame.K_UP:
+                    action = 2
+                elif event.key == pygame.K_DOWN:
+                    action = 3
+                else:
+                    pass
+
+                if action is not None:
+                    obs, reward, done, info = env.step(action)
+                    #print(f"Action: {action}, Observation: {obs}, Reward: {reward}")
+                    print(reward)
+        if env.render_enabled:
+            env.screen.fill((0, 0, 0))
+            env.screen_manager.draw_screens()
+            env.all_sprites.draw(env.screen)
+            pygame.display.flip()
+    env.close()
+    pygame.quit()

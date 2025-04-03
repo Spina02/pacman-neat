@@ -20,11 +20,13 @@ except ModuleNotFoundError:
     print("Error: Could not find PacmanEnvironment.")
     sys.exit(1)
 
+EASY_GEN = 200
 DEFAULT_CONFIG_PATH = os.path.join(project_root, 'config')
 DEFAULT_CHECKPOINT_DIR = os.path.join(project_root, 'checkpoints')
 
 class RunBestGenome:
-    def __init__(self, config_path, checkpoint_path):
+    def __init__(self, config_path, checkpoint_path, debug=False):
+        self.debug = debug
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"NEAT configuration not found: {config_path}")
         if not os.path.exists(checkpoint_path):
@@ -35,6 +37,7 @@ class RunBestGenome:
         self.best_genome = None
         self.network = None
         self.env = None
+        self.current_gen = int(self.checkpoint_path.split('-')[-1].split('.')[0])
 
         print(f"Loading NEAT config from: {self.config_path}")
         self.config = neat.Config(
@@ -71,11 +74,16 @@ class RunBestGenome:
 
         print("\n--- Starting Pacman Game Run ---")
         try:
+            self.env.current_gen = self.current_gen
             obs = self.env.reset()
+            if self.current_gen < EASY_GEN:
+                self.env.game_state.no_ghosts = True
+                
             done = False
             total_reward = 0
             step_count = 0
 
+            if self.debug: print("[action, reward] for each step:")
             running = True
             while running and not done and step_count < max_steps:
                 for event in pygame.event.get():
@@ -91,10 +99,15 @@ class RunBestGenome:
                 action = np.argmax(outputs)
 
                 obs, reward, done, info = self.env.step(action)
+                
                 total_reward += reward
+                
+                if self.debug: print("[", action, ",", reward, end='],')
+                #print(total_reward)
+                
                 step_count += 1
 
-                time.sleep(1 / 60)
+                time.sleep(1 / 120)
 
             print("\n--- Game Run Finished ---")
             print(f"Reason: {'Completed level / Died' if done else 'Window closed' if not running else 'Max steps reached'}")
@@ -110,6 +123,9 @@ class RunBestGenome:
             print("Environment closed.")
 
 if __name__ == "__main__":
+    
+    DEBUG = False
+    
     parser = argparse.ArgumentParser(description="Run best Pacman genome from NEAT checkpoint.")
     parser.add_argument("checkpoint_file", type=str,
                         help="Path to the NEAT checkpoint file.")
@@ -122,7 +138,7 @@ if __name__ == "__main__":
     pygame.display.set_caption("NEAT Pacman - Best Genome Run")
 
     try:
-        runner = RunBestGenome(config_path=args.config, checkpoint_path=args.checkpoint_file)
+        runner = RunBestGenome(config_path=args.config, checkpoint_path=args.checkpoint_file, debug=DEBUG)
         runner.run()
     except FileNotFoundError as e:
         print(f"Error: {e}")

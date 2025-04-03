@@ -7,3 +7,4 @@ settings.json
 *.DS_Store
 notes.md
 checkpoints/
+old*/

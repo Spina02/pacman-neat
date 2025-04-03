@@ -9,17 +9,25 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import game.game_env as game
 
+EASY_GEN = 200
 CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", 'config'))
 CHECKPOINT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", 'checkpoints'))
 
 # Top-level function to evaluate a single genome.
 # It accepts a tuple (genome_id, genome, config, render) and returns (genome_id, total_reward)
 def evaluate_genome(args):
-    genome_id, genome, config, render = args
+    
+    current_gen, genome_id, genome, config, render = args
     env = None
     try:
         env = game.PacmanEnvironment(render)
+        env.current_gen = current_gen
         state = env.reset()
+        
+        if current_gen < EASY_GEN:
+            env.game_state.no_ghosts = True
+
+            
         net = neat.nn.FeedForwardNetwork.create(genome, config)
         done = False
         total_reward = 0
@@ -28,6 +36,7 @@ def evaluate_genome(args):
             outputs = net.activate(state)
             action = np.argmax(outputs)
             state, reward, done, _ = env.step(action)
+                
             total_reward += reward
             genome.fitness += reward
     except Exception as e:
@@ -39,8 +48,9 @@ def evaluate_genome(args):
     return (genome_id, total_reward)
 
 class Trainer:
-    def __init__(self, neat_config_file=CONFIG_PATH, gen=1000, cores=14, resume_from=None, render=False):
+    def __init__(self, neat_config_file=CONFIG_PATH, gen=1000, cores=2, resume_from=None, render=False):
         self.gen = gen
+        self.current_gen = 0
         self.cores = cores
         self.render = render
         self.neat_config = neat.Config(
@@ -55,6 +65,7 @@ class Trainer:
             print(f"Resuming from generation {self.population.generation}")
         else:
             self.population = neat.Population(self.neat_config)
+        self.current_gen = self.population.generation
 
         self.population.add_reporter(neat.StdOutReporter(True))
         prefix = os.path.join(CHECKPOINT_DIR, 'checkpoint-')
@@ -67,9 +78,10 @@ class Trainer:
         self.pool = mp.Pool(processes=self.cores)
 
     def _eval_genomes(self, genomes, config):
+        
         # Prepare a dictionary for quick access
         genome_dict = {genome_id: genome for genome_id, genome in genomes}
-        args = [(genome_id, genome, config, self.render) for genome_id, genome in genomes]
+        args = [(self.population.generation, genome_id, genome, config, self.render) for genome_id, genome in genomes]
         results = self.pool.map(evaluate_genome, args)
         for genome_id, reward in results:
             genome_dict[genome_id].fitness = reward
@@ -89,9 +101,22 @@ class Trainer:
         self._run(self.gen)
 
 if __name__ == "__main__":
+    
     TRAIN = 1
     if not os.path.exists(CHECKPOINT_DIR):
+        os.makedirs(CHECKPOINT_DIR)
         checkpoints = []
+        
+    # look if there is a command line argument which indicates the checkpoint to resume from
+    if len(sys.argv) > 1:
+        print(sys.argv[1])
+        if sys.argv[1] == "reset":
+            for f in os.listdir(CHECKPOINT_DIR):
+                os.remove(os.path.join(CHECKPOINT_DIR, f))
+            checkpoints = []
+        else:
+            CHECKPOINT_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "checkpoints", sys.argv[1]))
+            checkpoints = [CHECKPOINT_FILE]
     else:
         checkpoints = sorted(
             [f for f in os.listdir(CHECKPOINT_DIR) if f.startswith('checkpoint-')],
@@ -101,11 +126,13 @@ if __name__ == "__main__":
     if checkpoints:
         last_checkpoint = os.path.join(CHECKPOINT_DIR, checkpoints[-1])
         print(f"Resuming from checkpoint: {last_checkpoint}")
+        checkpoint = last_checkpoint
     else:
+        checkpoint = None
         print("No checkpoints found. Starting from scratch.")
 
     if TRAIN:
-        t = Trainer(gen=1000, cores=15, resume_from=last_checkpoint)
+        t = Trainer(gen=1000, cores=15, resume_from=checkpoint, render = False)
     else:
-        t = Trainer(gen=1, cores=1, resume_from=last_checkpoint, render=True)
+        t = Trainer(gen=1, cores=1, resume_from=checkpoint, render=True)
     t.main()

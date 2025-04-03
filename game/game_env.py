@@ -10,12 +10,14 @@ if pacman_path not in sys.path:
 from src.game.state_management import GameState
 from src.game.event_management import EventHandler
 from src.gui.screen_management import ScreenManager
-from src.utils.coord_utils import get_idx_from_coords
-from src.configs import SCREEN_WIDTH, SCREEN_HEIGHT, CELL_SIZE, NUM_ROWS, NUM_COLS
+from src.utils.coord_utils import get_idx_from_coords, pixel_to_grid
+from src.configs import CELL_SIZE, NUM_ROWS, NUM_COLS, TILE_SIZE
 
 #?--------------------------------------------------------------
 #?                    Environment class
 #?--------------------------------------------------------------
+
+
 
 class PacmanEnvironment:
     """
@@ -36,11 +38,11 @@ class PacmanEnvironment:
         self.render_enabled = render
         self.px = 0
         self.py = 0
-        self.prev_px = 0
-        self.prev_py = 0
         self.visits = None
-        self.last_action_stuck = False
-        self.stuck_counter = 0
+        self.neg_count = 0
+        self.current_gen = 0
+        self.steps_since_last_dot = 0
+        self.last_action = None
         
     #?--------------------------------------------------------------
     #?                    Initialization functions
@@ -70,6 +72,11 @@ class PacmanEnvironment:
         self.all_sprites = pygame.sprite.Group()
         
         self.prev_points = 0
+        self.neg_count = 0
+        self.prev_dist_to_closest_dot = float('inf')
+        self.stuck_counter = 0
+        self.steps_since_last_dot = 0
+        self.last_action = None
         
         self.screen_manager = ScreenManager(self.screen, self.game_state, self.all_sprites)
             
@@ -78,7 +85,18 @@ class PacmanEnvironment:
         rows, cols = self.game_state.level_matrix_np.shape
         self.visits = np.zeros((rows, cols), dtype=int)
         
+        START_MAX_STEPS = 1500
+        FINAL_MAX_STEPS = 4000
+        GENS_TO_REACH_FINAL = 200 # Reach final limit after 150 generations
+        
+        if self.current_gen < GENS_TO_REACH_FINAL:
+            self.MAX_EPISODE_STEPS = int(START_MAX_STEPS + (FINAL_MAX_STEPS - START_MAX_STEPS) * (self.current_gen / GENS_TO_REACH_FINAL))
+        else:
+            self.MAX_EPISODE_STEPS = FINAL_MAX_STEPS
+        
         obs = self.get_observation()
+        
+        self.remaining_dots = obs[18]
         
         return obs
     
@@ -131,21 +149,40 @@ class PacmanEnvironment:
         # Actually update game logic
         dt = 1
         self.all_sprites.update(dt)
+        
+        previous_dots = self.remaining_dots
 
-        # Determine if done
-        if self.game_state.is_pacman_dead or self.game_state.level_complete:
-            done = True
-            
+        # Get the current observation
         obs = self.get_observation()
+        
+        self.remaining_dots = obs[18]
+        
+        # Determine if done
         done = self.game_state.is_pacman_dead or self.game_state.level_complete
+        
+        # Update steps since last dot counter
+        dots_eaten_this_step = previous_dots - self.remaining_dots
+        if dots_eaten_this_step > 0:
+            self.steps_since_last_dot = 0
+        else:
+            self.steps_since_last_dot += 1
+            
+        reward = self.calculate_reward(current_points, obs)
+        
+        self.last_action = action
         
         # Safety check
         rows, cols = self.visits.shape
         if 0 <= self.py < rows and 0 <= self.px < cols:
             self.visits[self.py, self.px] += 1
         
-        reward = self.calculate_reward(current_points, obs, done)
-        
+        # Max steps check
+        timeout_penalty = -100
+        if not done and self.game_state.step_count > self.MAX_EPISODE_STEPS:
+            reward += timeout_penalty
+            # End the episode due to timeout
+            done = True
+
         self.prev_points = self.game_state.points
 
         info = {}
@@ -198,7 +235,10 @@ class PacmanEnvironment:
                     rel_c = (gy - pacman_grid[1]) / NUM_COLS
                     ghost_rel[i*2]     = rel_r
                     ghost_rel[i*2 + 1] = rel_c
-                # If the ghost doesn't exist or isn't placed, leave (0,0)
+                else:
+                    ghost_rel[i*2]     = -1
+                    ghost_rel[i*2 + 1] = -1
+                # If the ghost doesn't exist or isn't placed, leave (1,1)
 
             # (3) Ghost scared bits
             ghost_scared_bits = np.array(self.game_state.scared_ghosts, dtype=int)
@@ -298,99 +338,187 @@ class PacmanEnvironment:
     #?                      Reward function
     #?--------------------------------------------------------------
 
-    def calculate_reward(self, previous_points, current_observation, done):
+    def calculate_reward(self, previous_points, current_observation):
         reward = 0.0
+        current_points = self.game_state.points
 
-        # 1. Reward for Points Gained
-        points_gain = self.game_state.points - previous_points
-        if points_gain > 0:
-            reward += points_gain * 3 # +30 dot, +45 powerup, +75 ghost
-        else:
-            reward -= 0.1 # penalty for not eating anything
+        # 1. Cost of Living
+        COST_OF_LIVING = -0.005
+        reward += COST_OF_LIVING
 
-        # 2. Penalty for Pacman Death
+        # 2. Reward for Points Gained
+        SCORE_MULTIPLIER = 6
+        points_gain = current_points - previous_points
+
+        # 3. Specific Event Bonuses
+        DOT_EATEN_BONUS = 8.0
+        POWER_PELLET_EATEN_BONUS = 20.0
+        GHOST_EATEN_BONUS = 50.0
+
+        if points_gain == 10: # Pacman ate a standard dot
+            reward += points_gain * SCORE_MULTIPLIER
+            reward += DOT_EATEN_BONUS
+        elif points_gain == 15: # Pacman ate a power pellet
+            reward += points_gain * SCORE_MULTIPLIER
+            reward += POWER_PELLET_EATEN_BONUS
+        elif points_gain == 25: # Pacman ate a ghost
+            reward += points_gain * SCORE_MULTIPLIER
+            reward += GHOST_EATEN_BONUS
+        elif points_gain > 0:
+            reward += points_gain * SCORE_MULTIPLIER
+
+        # 3. Penalty for Death
         if self.game_state.is_pacman_dead:
             reward -= 500
-
-        # 3. Bonus for Level Completion
+            
+        # 4. Bonus for Level Completion
         if self.game_state.level_complete:
-            reward += 1000.0
+            reward += 15000
 
-        # 4. Penalty for Stuck Pacman
+        #5. Penalty for Getting Stuck Against Wall (Capped counter)
+        STUCK_PENALTY_FACTOR = -0.1
+        MAX_STUCK_COUNT_FOR_PENALTY = 10 # Stop increasing penalty after 10 consecutive stuck steps
         dir_decode = {"l": 0, "r": 1, "u": 2, "d": 3}
-        wall_dists = current_observation[15:19]
-        wall_dist = wall_dists[dir_decode[self.game_state.direction]]
-        if wall_dist < 1e-3:
-            self.stuck_counter += 1
-            # If the wall is too close, penalize
-            reward -= 0.1 * self.stuck_counter
+        wall_dists = current_observation[19:23]
+        current_dir_idx = dir_decode.get(self.game_state.direction)
+
+        # is_stuck = False
+        if current_dir_idx is not None:
+            wall_dist = wall_dists[current_dir_idx]
+            if wall_dist < 1e-3: # Check if against wall
+                self.stuck_counter += 1
+                # is_stuck = True
+                stuck_penalty = STUCK_PENALTY_FACTOR * min(self.stuck_counter, MAX_STUCK_COUNT_FOR_PENALTY)
+                reward += stuck_penalty
+            else:
+                self.stuck_counter = 0
         else:
             self.stuck_counter = 0
 
-        # 5. Reward for Moving Closer to Dots
-        current_dot_vector = current_observation[10:12]
-        current_dist_to_dot = np.linalg.norm(current_dot_vector)
-        if current_dist_to_dot < self.prev_dist_to_closest_dot and not self.last_action_stuck:
-            reward += 0.5
-        self.prev_dist_to_closest_dot = current_dist_to_dot
+        # #6. Reward for Moving Closer to Dots (Only if not stuck)
+        # APPROACH_DOT_REWARD = 0.35
+        # current_dot_vector = current_observation[14:16]
+        # # Check if dots remain (vector is not [0,0])
+        # if np.any(current_dot_vector):
+        #     current_dist_to_dot = np.linalg.norm(current_dot_vector)
+        #     if current_dist_to_dot < self.prev_dist_to_closest_dot and not is_stuck:
+        #         reward += APPROACH_DOT_REWARD
+        #     self.prev_dist_to_closest_dot = current_dist_to_dot
+        # else:
+        #     # No dots left, maybe set distance to 0 or handle differently
+        #     self.prev_dist_to_closest_dot = 0.0
 
-        ghost_relative_positions = current_observation[2:10]
-        if not current_observation[-1]:
-            min_dist_to_ghost = float('inf')
-            for i in range(0, 8, 2):
-                dist = np.linalg.norm(ghost_relative_positions[i:i+2])
-                min_dist_to_ghost = min(min_dist_to_ghost, dist)
-            if min_dist_to_ghost < 0.1:
-                reward -= 2.0
+        # 7. Reward/Penalty for Ghost Interaction
+        GHOST_INTERACTION_FACTOR = 2.5 # Tune
+        if not self.game_state.no_ghosts:
+            ghost_relative_positions = current_observation[2:10]
+            scared_ghosts = current_observation[10:14]
+            gh_reward = 0.0
+            for i in range(4):
+                # Consider only active ghosts
+                ghost_pos = ghost_relative_positions[2*i:2*i+2]
+                if np.any(ghost_pos != -1): # Check if ghost exists / is active
+                    dist = np.linalg.norm(ghost_pos)
+                    if dist > 1e-6:
+                        proximity_threshold = 0.2 # Fraction of map size
+                        if dist < proximity_threshold:
+                            closeness_factor = (proximity_threshold - dist) / proximity_threshold # 0 (at threshold) to 1 (at dist 0)
+                            sign = 1.0 if scared_ghosts[i] else -1.0
+                            gh_points = sign * GHOST_INTERACTION_FACTOR * closeness_factor**2 # Penalize quadratically closer
+                            gh_reward += gh_points
+            reward += gh_reward
+
+        # 8. Exploration / Visit Penalty
+        VISIT_BONUS_FIRST =         1 # Bonus for first visit
+        VISIT_BONUS_SECOND =      0.5 # Bonus for second
+        VISIT_PENALTY_THRESHOLD =  12 # Start penalizing later
+        VISIT_PENALTY_FACTOR =   -0.1 # Penalty factor for each visit over threshold
+        VISIT_PENALTY_CAP =     -0.75 # Cap penalty to avoid excessive negative rewards
+
+        rows, cols = self.visits.shape
+        current_row, current_col = int(self.py), int(self.px)
+        if 0 <= current_row < rows and 0 <= current_col < cols:
+            visit_count = self.visits[current_row, current_col]
+
+            if visit_count == 0:
+                reward += VISIT_BONUS_FIRST
+            elif visit_count == 1:
+                reward += VISIT_BONUS_SECOND
+            elif visit_count > VISIT_PENALTY_THRESHOLD:
+                visit_penalty = VISIT_PENALTY_FACTOR * (visit_count - VISIT_PENALTY_THRESHOLD)
+                reward += max(VISIT_PENALTY_CAP, visit_penalty)
                 
-        # Encourage exploration with tile visitation
-        visit_count = self.visits[int(self.py), int(self.px)]
-        if visit_count == 1:
-            # first time on this tile
-            reward += 0.1
-        elif visit_count == 2:
-            reward += 0.05
+        # 9. NEW: Penalty for not eating dots
+        NO_DOT_PENALTY_START_STEP = 20 # Start penalizing after 25 steps without eating
+        NO_DOT_PENALTY_FACTOR =  -0.05 # Penalty per step after threshold
+        NO_DOT_PENALTY_CAP =        -1 # Maximum penalty per step for this
 
-        # If you want repeated visits to the same tile to be penalized:
-        # e.g. if visit_count > 10
-        if visit_count > 20:
-            reward -= 0.01 * (visit_count - 20)
+        if self.steps_since_last_dot > NO_DOT_PENALTY_START_STEP:
+            no_dot_penalty = NO_DOT_PENALTY_FACTOR * (self.steps_since_last_dot - NO_DOT_PENALTY_START_STEP)
+            reward += max(NO_DOT_PENALTY_CAP, no_dot_penalty)
+
+        # 10. Penalty for Immediate Reversal (Anti-Oscillation)
+        REVERSAL_PENALTY = -1.5
+        action_map = {"l": 0, "r": 1, "u": 2, "d": 3}
+        current_action_int = action_map.get(self.game_state.direction)
+
+        if self.last_action is not None and current_action_int is not None:
+            # Check if actions are opposite (l<->r or u<->d)
+            is_opposite = abs(current_action_int - self.last_action) == 1 and current_action_int // 2 == self.last_action // 2
+            # Apply penalty only if no points were gained (didn't just eat something)
+            if is_opposite and points_gain <= 0:
+                # Optional: make penalty harsher if also stuck or not moving towards dot?
+                reward += REVERSAL_PENALTY
 
         return reward
-
+    
+    
     def close(self):
         pygame.quit()
         
 if __name__ == "__main__":
-    # Test the environment using the keyboard
+    import pygame, time
+
     env = PacmanEnvironment(render=True)
     env.reset()
+    env.current_gen = 9999 # Set to max gen for testing
     done = False
-    action = None
+
+    key_mappings = {
+        pygame.K_LEFT: 0,
+        pygame.K_RIGHT: 1,
+        pygame.K_UP: 2,
+        pygame.K_DOWN: 3
+    }
+
+    last_action = None
+    total_reward = 0.0
+    
     while not done:
+        action = last_action
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 done = True
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_LEFT:
-                    action = 0
-                elif event.key == pygame.K_RIGHT:
-                    action = 1
-                elif event.key == pygame.K_UP:
-                    action = 2
-                elif event.key == pygame.K_DOWN:
-                    action = 3
-                else:
-                    pass
+                mapped = key_mappings.get(event.key, None)
+                if mapped is not None:
+                    action = mapped
 
-                if action is not None:
-                    obs, reward, done, info = env.step(action)
-                    #print(f"Action: {action}, Observation: {obs}, Reward: {reward}")
-                    print(reward)
+        if action is not None:
+            obs, reward, done, info = env.step(action)
+            total_reward += reward
+            last_action = action
+            print(reward)
+
         if env.render_enabled:
             env.screen.fill((0, 0, 0))
             env.screen_manager.draw_screens()
             env.all_sprites.draw(env.screen)
             pygame.display.flip()
+            
+        time.sleep(1/60)
+    print("Game Over, total reward:", total_reward)
+
     env.close()
     pygame.quit()

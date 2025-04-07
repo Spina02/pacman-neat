@@ -20,7 +20,7 @@ except ModuleNotFoundError:
     print("Error: Could not find PacmanEnvironment.")
     sys.exit(1)
 
-EASY_GEN = 200
+EASY_GEN = 300
 DEFAULT_CONFIG_PATH = os.path.join(project_root, 'config')
 DEFAULT_CHECKPOINT_DIR = os.path.join(project_root, 'checkpoints')
 
@@ -37,7 +37,10 @@ class RunBestGenome:
         self.best_genome = None
         self.network = None
         self.env = None
-        self.current_gen = int(self.checkpoint_path.split('-')[-1].split('.')[0])
+        try:
+            self.current_gen = int(self.checkpoint_path.split('-')[-1].split('.')[0])
+        except ValueError:
+            self.current_gen = 0  # Fallback if the filename does not follow the usual pattern
 
         print(f"Loading NEAT config from: {self.config_path}")
         self.config = neat.Config(
@@ -48,10 +51,27 @@ class RunBestGenome:
             self.config_path
         )
 
+        self.population = None
         print(f"Restoring population from checkpoint: {self.checkpoint_path}")
-        self.population = neat.Checkpointer.restore_checkpoint(self.checkpoint_path)
+        if self.checkpoint_path.endswith('.pkl'):
+            with open(self.checkpoint_path, 'rb') as f:
+                winner_genome = pickle.load(f)
 
-        self.best_genome = self.population.best_genome
+            # Then rebuild the NEAT config
+            config = neat.Config(
+                neat.DefaultGenome,
+                neat.DefaultReproduction,
+                neat.DefaultSpeciesSet,
+                neat.DefaultStagnation,
+                self.config_path
+            )
+            # Finally recreate the network
+            self.network = neat.nn.FeedForwardNetwork.create(winner_genome, config)
+            self.best_genome = winner_genome  # Use the loaded genome as the best_genome
+        else:
+            self.population = neat.Checkpointer.restore_checkpoint(self.checkpoint_path)
+            self.best_genome = self.population.best_genome
+
         if self.best_genome is None:
             print("Warning: best_genome is None. Finding best in population.")
             genomes = list(self.population.population.values())
@@ -83,7 +103,7 @@ class RunBestGenome:
             total_reward = 0
             step_count = 0
 
-            if self.debug: print("[action, reward] for each step:")
+            if self.debug: print("[action, pacman_pos, reward] for each step:")
             running = True
             while running and not done and step_count < max_steps:
                 for event in pygame.event.get():
@@ -102,7 +122,7 @@ class RunBestGenome:
                 
                 total_reward += reward
                 
-                if self.debug: print("[", action, ",", reward, end='],')
+                if self.debug: print(f"[{action}, [{self.env.pacman_pos[0]:.3f},{self.env.pacman_pos[1]:.3f}] , {reward:.3f}", end = "],")
                 #print(total_reward)
                 
                 step_count += 1

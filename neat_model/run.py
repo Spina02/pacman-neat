@@ -1,3 +1,5 @@
+# --- START OF FILE run.py ---
+
 import os
 import neat
 import sys
@@ -20,27 +22,27 @@ except ModuleNotFoundError:
     print("Error: Could not find PacmanEnvironment.")
     sys.exit(1)
 
-EASY_GEN = 300
 DEFAULT_CONFIG_PATH = os.path.join(project_root, 'config')
 DEFAULT_CHECKPOINT_DIR = os.path.join(project_root, 'checkpoints')
+DEFAULT_BEST_GENOME_DIR = os.path.join(DEFAULT_CHECKPOINT_DIR, 'best_genomes')
 
-class RunBestGenome:
-    def __init__(self, config_path, checkpoint_path, debug=False):
+class RunGenome:
+    def __init__(self, config_path, genome_to_load, observation_mode='minimap', is_best_overall=False, debug=0):
         self.debug = debug
+        self.observation_mode = observation_mode
+        self.is_best_overall = is_best_overall
+
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"NEAT configuration not found: {config_path}")
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"NEAT checkpoint not found: {checkpoint_path}")
+        if not os.path.exists(genome_to_load):
+            if not is_best_overall or not genome_to_load.endswith(f'best_{observation_mode}_latest.pkl'):
+                 raise FileNotFoundError(f"Genome file or checkpoint not found: {genome_to_load}")
 
         self.config_path = config_path
-        self.checkpoint_path = checkpoint_path
+        self.load_path = genome_to_load
         self.best_genome = None
         self.network = None
         self.env = None
-        try:
-            self.current_gen = int(self.checkpoint_path.split('-')[-1].split('.')[0])
-        except ValueError:
-            self.current_gen = 0  # Fallback if the filename does not follow the usual pattern
 
         print(f"Loading NEAT config from: {self.config_path}")
         self.config = neat.Config(
@@ -51,61 +53,94 @@ class RunBestGenome:
             self.config_path
         )
 
-        self.population = None
-        print(f"Restoring population from checkpoint: {self.checkpoint_path}")
-        if self.checkpoint_path.endswith('.pkl'):
-            with open(self.checkpoint_path, 'rb') as f:
-                winner_genome = pickle.load(f)
+        print(f"Attempting to load genome/checkpoint from: {self.load_path}")
+        if self.load_path.endswith('.pkl'):
+            try:
+                with open(self.load_path, 'rb') as f:
+                    self.best_genome = pickle.load(f)
+                print(f"Successfully loaded genome PKL: ID={self.best_genome.key}, Fitness={getattr(self.best_genome, 'fitness', 'N/A'):.2f}")
+                try:
+                    if '_gen' in self.load_path:
+                        gen_str = self.load_path.split('_gen')[-1].split('_')[0]
+                        self.current_gen = int(gen_str)
+                    else:
+                        print("Warning: Unable to extract generation from filename. Setting to 9999.")
+                        
+                        self.current_gen = 9999
+                except:
+                    print("Warning: Unable to extract generation from filename. Setting to 9999.")
+                    self.current_gen = 9999
+            except FileNotFoundError:
+                 if self.is_best_overall:
+                    print("Warning: Latest best genome file not found. No simulation possible for '--best'.")
+                    raise FileNotFoundError("Latest best genome file not found. Run training first.")
+                 else:
+                    print(f"Error: Specified PKL file not found: {self.load_path}")
+                    raise
+            except Exception as e:
+                print(f"Error loading genome PKL: {e}")
+                raise
 
-            # Then rebuild the NEAT config
-            config = neat.Config(
-                neat.DefaultGenome,
-                neat.DefaultReproduction,
-                neat.DefaultSpeciesSet,
-                neat.DefaultStagnation,
-                self.config_path
-            )
-            # Finally recreate the network
-            self.network = neat.nn.FeedForwardNetwork.create(winner_genome, config)
-            self.best_genome = winner_genome  # Use the loaded genome as the best_genome
-        else:
-            self.population = neat.Checkpointer.restore_checkpoint(self.checkpoint_path)
-            self.best_genome = self.population.best_genome
+        else: # NEAT checkpoint
+             print(f"Restoring population from checkpoint: {self.load_path}")
+             try:
+                population = neat.Checkpointer.restore_checkpoint(self.load_path)
+                if not self.is_best_overall:
+                    self.best_genome = population.best_genome
+                    if self.best_genome is None:
+                        print("Warning: best_genome is None in checkpoint. Finding best in population.")
+                        genomes = list(population.population.values())
+                        if not genomes: raise ValueError("No genomes in checkpoint!")
+                        genomes.sort(key=lambda g: g.fitness if g.fitness is not None else -float('inf'), reverse=True)
+                        self.best_genome = genomes[0]
+                    print(f"Using best genome from checkpoint: ID={self.best_genome.key}, Fitness={getattr(self.best_genome, 'fitness', 'N/A'):.2f}")
+                    # Imposta la generazione dal checkpoint
+                    self.current_gen = population.generation
+                else:
+                    # Questo caso non dovrebbe accadere se il caricamento PKL funziona
+                    print("Error: --best flag was used but couldn't load PKL, and checkpoint loading is ambiguous for best overall.")
+                    raise ValueError("Cannot determine best overall genome from checkpoint when --best is specified.")
+
+             except Exception as e:
+                print(f"Error restoring checkpoint: {e}")
+                raise
 
         if self.best_genome is None:
-            print("Warning: best_genome is None. Finding best in population.")
-            genomes = list(self.population.population.values())
-            if not genomes:
-                raise ValueError("No genomes in checkpoint!")
-            genomes.sort(key=lambda g: g.fitness if g.fitness else -float('inf'), reverse=True)
-            self.best_genome = genomes[0]
+            raise ValueError("Could not load or find a genome to run.")
 
-        print(f"Best genome found: ID={self.best_genome.key}, Fitness={self.best_genome.fitness:.2f}")
-        print("Creating neural network from the best genome...")
+        print(f"Genome to run: ID={self.best_genome.key}, Fitness={getattr(self.best_genome, 'fitness', 'N/A'):.2f}")
+        print("Creating neural network from the genome...")
         self.network = neat.nn.FeedForwardNetwork.create(self.best_genome, self.config)
 
         print("Initializing Pacman environment for visualization...")
-        self.env = PacmanEnvironment(render=True)
+        self.env = PacmanEnvironment(render=True, observation_mode=self.observation_mode)
+        
+        print(f"Setting environment generation context to: {self.current_gen}")
+        self.env.current_gen = self.current_gen
 
-    def run(self, max_steps=5000):
+    def run(self, max_steps=None):
         if not self.network or not self.env:
             print("Error: Network or Environment not initialized.")
             return
 
         print("\n--- Starting Pacman Game Run ---")
+        run_max_steps = self.env.MAX_EPISODE_STEPS if max_steps is None else max_steps
+        print(f"Using MAX_EPISODE_STEPS: {run_max_steps}")
+
         try:
-            self.env.current_gen = self.current_gen
             obs = self.env.reset()
-            if self.current_gen < EASY_GEN:
+            self.env.debug = self.debug
+            if self.env.current_gen < self.env.EASY_GEN:
                 self.env.game_state.no_ghosts = True
-                
+                print("INFO: Ghosts disabled for early generation.")
+
             done = False
             total_reward = 0
             step_count = 0
 
-            if self.debug: print("[action, pacman_pos, reward] for each step:")
+            #if self.debug >= 3: print("[Step, Action, Reward, CumulativeReward]")
             running = True
-            while running and not done and step_count < max_steps:
+            while running and not done and step_count < run_max_steps:
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         print("QUIT event received, stopping run.")
@@ -119,47 +154,92 @@ class RunBestGenome:
                 action = np.argmax(outputs)
 
                 obs, reward, done, info = self.env.step(action)
-                
+
                 total_reward += reward
-                
-                if self.debug: print(f"[{action}, [{self.env.pacman_pos[0]:.3f},{self.env.pacman_pos[1]:.3f}] , {reward:.3f}", end = "],")
-                #print(total_reward)
-                
+
+                # if self.debug >= 3:
+                #      print(f"[{step_count}, {action}, {reward:.3f}, {total_reward:.3f}]")
+
                 step_count += 1
 
-                time.sleep(1 / 120)
+                # Riduci il time.sleep per una visualizzazione più fluida
+                time.sleep(1 / 120) # 120 FPS target
+
+            EXP_BONUS = 1 # Riconferma il valore
+            exploration_reward = self.env.tot_visited * EXP_BONUS
+            total_reward += exploration_reward
 
             print("\n--- Game Run Finished ---")
-            print(f"Reason: {'Completed level / Died' if done else 'Window closed' if not running else 'Max steps reached'}")
+            print(f"Exploration bonus added: {exploration_reward}")
+            reason = "Max steps reached"
+            if done:
+                 reason = "Completed level" if self.env.game_state.level_complete else "Pacman died"
+            elif not running:
+                 reason = "Window closed"
+            print(f"Reason: {reason}")
             print(f"Total steps: {step_count}")
             print(f"Final Score (from game state): {self.env.game_state.points}")
-            print(f"Total Accumulated Reward: {total_reward:.2f}")
+            print(f"Total Accumulated Reward (incl. exploration): {total_reward:.2f}")
 
         except Exception as e:
             print(f"\nError during the run: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             if self.env:
                 self.env.close()
             print("Environment closed.")
 
 if __name__ == "__main__":
-    
-    DEBUG = False
-    
-    parser = argparse.ArgumentParser(description="Run best Pacman genome from NEAT checkpoint.")
-    parser.add_argument("checkpoint_file", type=str,
-                        help="Path to the NEAT checkpoint file.")
+
+    parser = argparse.ArgumentParser(description="Run a Pacman genome from NEAT.")
+    parser.add_argument("--load_file", type=str, default=None,
+                        help="Optional: Path to the NEAT checkpoint file OR a specific .pkl genome file.")
+    parser.add_argument("--best", action='store_true',
+                        help="Load the best genome found overall (looks for 'best_MODE_latest.pkl'). Overrides load_file if found.")
     parser.add_argument("--config", type=str,
                         default=DEFAULT_CONFIG_PATH,
                         help="Path to the NEAT config file.")
+    parser.add_argument('--observation_mode', type=str, default='minimap',
+                         choices=['simple', 'minimap'], help='Observation mode used during training.')
+    parser.add_argument('--max_steps', type=int, default=None,
+                         help="Override the maximum steps for the run (default: use environment's MAX_EPISODE_STEPS).")
+    parser.add_argument('--debug', type=int, default=0,
+                        help="Debug level for verbose output (0-3).")
+
     args = parser.parse_args()
 
     pygame.init()
-    pygame.display.set_caption("NEAT Pacman - Best Genome Run")
+    pygame.display.set_caption("NEAT Pacman - Genome Run")
+
+    genome_to_load_path = args.load_file
+    is_best_overall = args.best
+
+    # If --best is specified, check for the latest best genome
+    if args.best:
+        # Find pickle files beginning with "best_{args.observation_mode}_gen"
+        bests = [f for f in os.listdir(DEFAULT_BEST_GENOME_DIR)
+                 if f.startswith(f"best_{args.observation_mode}_gen") and f.endswith(".pkl")]
+        if not bests:
+            print("No matching best genome found in best_genomes directory.")
+            sys.exit(1)
+
+        # Sort by modification time (descending) to pick the latest file
+        bests.sort(
+            key=lambda f: os.path.getmtime(os.path.join(DEFAULT_BEST_GENOME_DIR, f)),
+            reverse=True
+        )
+        # Use the most recent file
+        genome_to_load_path = os.path.join(DEFAULT_BEST_GENOME_DIR, bests[0])
+        print(f"Using latest best genome: {genome_to_load_path}")
 
     try:
-        runner = RunBestGenome(config_path=args.config, checkpoint_path=args.checkpoint_file, debug=DEBUG)
-        runner.run()
+        runner = RunGenome(config_path=args.config,
+                           genome_to_load=genome_to_load_path,
+                           observation_mode=args.observation_mode,
+                           is_best_overall=is_best_overall,
+                           debug=args.debug)
+        runner.run(max_steps=args.max_steps)
     except FileNotFoundError as e:
         print(f"Error: {e}")
         sys.exit(1)

@@ -1,5 +1,3 @@
-# --- START OF FILE trainer.py ---
-
 import os
 import neat
 import sys
@@ -11,14 +9,19 @@ import sys
 import atexit
 import pygame
 import gc
+from .neat_utils import BestGenomeSaver
+import random
 
-# Mantieni riferimenti globali alle risorse da pulire
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+
 _pool = None
 _environments = []
 
-EASY_GEN = 300
 CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", 'config'))
 CHECKPOINT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", 'checkpoints'))
+BEST_GENOME_DIR = os.path.join(CHECKPOINT_DIR, 'best_genomes')
 
 def cleanup_resources():
     """Cleanup function to be called at exit"""
@@ -54,7 +57,6 @@ def cleanup_resources():
     _pool = None
     gc.collect()
 
-# Make sure the project root is correctly added if trainer.py is not in the root
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if (project_root not in sys.path):
     sys.path.insert(0, project_root)
@@ -84,7 +86,7 @@ def evaluate_genome(args):
         env.debug = 0
         state = env.reset()
         
-        if current_gen < EASY_GEN:
+        if current_gen < env.EASY_GEN:
             env.game_state.no_ghosts = True
 
             
@@ -97,10 +99,10 @@ def evaluate_genome(args):
             action = np.argmax(outputs)
             state, reward, done, _ = env.step(action)
             total_reward += reward
-            genome.fitness += reward
-        EXP_BONUS = 2
+        EXP_BONUS = 1
         reward = env.tot_visited * EXP_BONUS
-        genome.fitness += reward
+        total_reward += reward
+        genome.fitness = total_reward
         if env.debug >= 3: print(f"Exploration bonus: {reward}")
     except Exception as e:
         print(f"Error in evaluating genome {genome_id}: {e}")
@@ -160,6 +162,7 @@ class Trainer:
             neat.Checkpointer(generation_interval=5, filename_prefix=prefix)
         )
         self.population.add_reporter(neat.StatisticsReporter())
+        self.population.add_reporter(BestGenomeSaver(save_path=BEST_GENOME_DIR, filename_prefix=f'best_{self.observation_mode}', generation = self.current_gen))
 
         # Initialize the multiprocessing pool if cores > 1
         self.pool = None

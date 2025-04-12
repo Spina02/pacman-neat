@@ -50,7 +50,7 @@ class PacmanEnvironment:
         self.debug = 0
         self.max_reached = False
         self.ghost_order = ['blinky', 'pinky', 'inky', 'clyde']
-        self.EASY_GEN = 50
+        self.EASY_GEN = [50, 200, 300, 400] # Generations at which each ghost is added
         self.MAX_EPISODE_STEPS = 2000 # Default max steps per episode
 
     #?--------------------------------------------------------------
@@ -111,6 +111,10 @@ class PacmanEnvironment:
 
         rows, cols = self.game_state.level_matrix_np.shape
         self.visits = np.zeros((rows, cols), dtype=int)
+        
+        for i in range(len(self.ghost_order)):
+                if self.current_gen < self.EASY_GEN[i]:
+                    self.game_state.no_ghosts[self.ghost_order[i]] = True
 
         #START_MAX_STEPS = 2000
         #FINAL_MAX_STEPS = 4000
@@ -288,7 +292,7 @@ class PacmanEnvironment:
 
             # (2) Relative positions of ghosts
             ghost_rel = - np.ones(8)  # 4 ghosts * 2 coords
-            if not self.game_state.no_ghosts:
+            if self.game_state.no_ghosts != [False, False, False, False]:
                 ghosts = self.game_state.ghosts  # dict: ghost_name -> (gx, gy) in pixels
                 for i, name in enumerate(self.ghost_order):
                     if name in ghosts:
@@ -371,15 +375,14 @@ class PacmanEnvironment:
             
             # Combine everything into one observation vector
             observation = np.concatenate([
-                #pacman_pos,           # 2
-                ghost_rel,            # 8
-                ghost_scared_bits,    # 4
-                closest_dot_vec,      # 2
-                closest_powerup_vec,  # 2
-                remaining_dots,       # 1
-                wall_dists,           # 4
-                power_state,          # 1
-                last_action           # 4
+                ghost_rel,            # 8 -> [0, 7]
+                ghost_scared_bits,    # 4 -> [8, 11]
+                closest_dot_vec,      # 2 -> [12, 13]
+                closest_powerup_vec,  # 2 -> [14, 15]
+                remaining_dots,       # 1 -> [16]
+                wall_dists,           # 4 -> [17, 20]
+                power_state,          # 1 -> [21]
+                last_action           # 4 -> [22, 25]
             ]).astype(np.float32)     # Total: 26 elements
             
             if mode == "simple":
@@ -492,7 +495,7 @@ class PacmanEnvironment:
             print(f"Step: {self.game_state.step_count}, Pacman position: ({self.py}, {self.px}), Action: {current_action_int}")
 
         # 1. Cost of Living
-        COST_OF_LIVING = -0.025
+        COST_OF_LIVING = 0.5 #?
         reward += COST_OF_LIVING
         if self.debug >= 3: print(f"cost of living: {COST_OF_LIVING}")
 
@@ -511,7 +514,7 @@ class PacmanEnvironment:
         GHOST_EATEN_BONUS = 50.0
 
         if points_gain == 10: # Pacman ate a standard dot
-            reward += 20 * SCORE_MULTIPLIER
+            reward += 10 * SCORE_MULTIPLIER
             reward += DOT_EATEN_BONUS
             tmp = "dot"
         elif points_gain == 15: # Pacman ate a power pellet
@@ -530,7 +533,7 @@ class PacmanEnvironment:
         if points_gain > 0 and self.debug >= 3: print(f"Pacman ate a {tmp}, reward: {reward - last_reward}")
 
         # 4. Penalty for Death
-        DEATH_PENALTY = -500.0 # Large penalty for dying
+        DEATH_PENALTY = -1000.0
         if self.game_state.is_pacman_dead:
             reward += DEATH_PENALTY
             if self.debug >= 3: print(f"Pacman died, reward: {DEATH_PENALTY}")
@@ -543,8 +546,8 @@ class PacmanEnvironment:
 
         # 6. Penalty for Getting Stuck Against Wall
         if current_observation is not None:
-            STUCK_PENALTY_FACTOR = -0.15
-            STUCK_PENALTY_CAP = 1.5 # Limit penalty increase
+            STUCK_PENALTY_FACTOR = -0.2
+            STUCK_PENALTY_CAP = 2 # Limit penalty increase
             #MIN_STUCK_COUNT_FOR_PENALTY = 4 # Minimum stuck count to start penalty
 
             dir_decode = {"l": 0, "r": 1, "u": 2, "d": 3}
@@ -553,7 +556,7 @@ class PacmanEnvironment:
 
             if current_dir_idx is not None and len(wall_dists) > current_dir_idx:
                 wall_dist = wall_dists[current_dir_idx]
-                if wall_dist < 1e-3: # Check if against wall
+                if wall_dist < 1e-6: # Pacman is stuck against a wall
                     self.stuck_counter += 1
                     stuck_penalty = max(STUCK_PENALTY_FACTOR * self.stuck_counter, STUCK_PENALTY_CAP)
                     reward += stuck_penalty
@@ -565,7 +568,7 @@ class PacmanEnvironment:
                 
         # 7. Reward/Penalty for Ghost Interaction
         GHOST_INTERACTION_FACTOR = 2.5
-        if not self.game_state.no_ghosts:
+        if self.game_state.no_ghosts != [False, False, False, False]:
             gh_reward = 0.0
             pacman_r, pacman_c =  get_float_idx_from_coords(self.game_state.pacman_rect[0], self.game_state.pacman_rect[1], *self.game_state.start_pos, CELL_SIZE[0])
             ghosts_pixel_coords = self.game_state.ghosts
@@ -578,7 +581,7 @@ class PacmanEnvironment:
                     # Calculate grid distance (Euclidean)
                     dist_grid = np.sqrt((ghost_r - pacman_r)**2 + (ghost_c - pacman_c)**2)
 
-                    # Define a proximity threshold in grid units (e.g., 5 cells)
+                    # Define a proximity threshold in grid units
                     proximity_threshold_grid = 7.0
 
                     if dist_grid < proximity_threshold_grid and dist_grid > 0: # Avoid division by zero or self-collision case
@@ -600,8 +603,8 @@ class PacmanEnvironment:
             reward += gh_reward
 
         # 8. Penalty for Immediate Reversal (Anti-Oscillation)
-        REVERSAL_PENALTY = -0.1
-        MAX_REVERSAL_PENALTY = 4 # Maximum penalty for reversal
+        REVERSAL_PENALTY = -0.15
+        MAX_REVERSAL_PENALTY = 3 # Maximum penalty for reversal
         last_reward = reward
         if self.last_action is not None and current_action_int is not None:
             # Check if actions are opposite (l<->r or u<->d)
@@ -615,11 +618,10 @@ class PacmanEnvironment:
                 self.n_opposite = 0
                 
         # 9. Exploration / Visit Penalty
-        #TODO: decrease VISIT_BONUS_FIRST
         VISIT_BONUS_FIRST =        0.5 # Bonus for first visit
         VISIT_PENALTY_THRESHOLD =    4 # Start penalizing later
         VISIT_PENALTY_FACTOR =   -0.25 # Penalty factor for each visit over threshold
-        VISIT_PENALTY_CAP =         -3 # Cap penalty to avoid excessive negative rewards
+        VISIT_PENALTY_CAP =         -4 # Cap penalty to avoid excessive negative rewards
 
         rows, cols = self.visits.shape
         current_row, current_col = int(self.py), int(self.px)
@@ -628,7 +630,7 @@ class PacmanEnvironment:
 
             last_reward = reward
             if visit_count == 0: self.tot_visited += 1
-            if visit_count >= 0 and visit_count <= 7:
+            if visit_count >= 0 and visit_count <= 3:
                 if self.n_opposite == 0:
                     reward += VISIT_BONUS_FIRST
             elif visit_count > VISIT_PENALTY_THRESHOLD:
@@ -637,9 +639,9 @@ class PacmanEnvironment:
             if self.debug >= 3: print(f"Pacman visited {[current_row, current_col]} (count = {visit_count}), reward: {reward - last_reward}")
                  
         # 10. Penalty for not eating dots
-        NO_DOT_PENALTY_START_STEP =   50 # Start penalizing after 50 steps without eating
+        NO_DOT_PENALTY_START_STEP =  100 # Start penalizing after 50 steps without eating
         NO_DOT_PENALTY_FACTOR =    -0.05 # Penalty per step after threshold
-        NO_DOT_PENALTY_CAP =       -0.75 # Maximum penalty per step for this
+        NO_DOT_PENALTY_CAP =          -1 # Maximum penalty per step for this
 
         last_reward = reward
         if self.steps_since_last_dot > NO_DOT_PENALTY_START_STEP:
@@ -703,7 +705,7 @@ if __name__ == "__main__":
     last_action = last_action_minimap
     done = done_minimap
     
-    # env.game_state.no_ghosts = True
+    # env.game_state.no_ghosts = [True, False, False, False] # Uncomment to test with only one ghost
 
     clock = pygame.time.Clock()
 
@@ -728,10 +730,14 @@ if __name__ == "__main__":
                 for i, name in enumerate(env.ghost_order):
                     if obs[i*2] != -1 and obs[i*2 + 1] != -1:
                         print(f"{name} position: ({obs[i*2]}, {obs[i*2 + 1]})")
+                print(f"ghost scared bits {obs[8:12]}")
                 print(f"closest dot {obs[12:14]}")
                 print(f"closest power  up {obs[14:16]}")
                 print(f"remaining dots {obs[16]}")
                 print(f"wall distances {obs[17:21]}")
+                print(f"Pacman power state: {obs[21]}")
+                print(f"Pacman last action: {obs[22]}")
+                print(f"Minimap:\n", obs[26:90].reshape(8, 8))
                 
             elif env.debug == 2:
                 print(f"Action: {action}, Reward: {reward:.3f}, Total Reward: {total_reward:.3f}, Done: {done}")

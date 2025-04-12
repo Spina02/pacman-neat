@@ -85,10 +85,6 @@ def evaluate_genome(args):
         env.current_gen = current_gen
         env.debug = 0
         state = env.reset()
-        
-        if current_gen < env.EASY_GEN:
-            env.game_state.no_ghosts = True
-
             
         net = neat.nn.FeedForwardNetwork.create(genome, config)
         done = False
@@ -99,7 +95,7 @@ def evaluate_genome(args):
             action = np.argmax(outputs)
             state, reward, done, _ = env.step(action)
             total_reward += reward
-        EXP_BONUS = 1
+        EXP_BONUS = 4
         reward = env.tot_visited * EXP_BONUS
         total_reward += reward
         genome.fitness = total_reward
@@ -129,7 +125,7 @@ class Trainer:
             neat_config_file
         )
 
-        expected_inputs = 88 if self.observation_mode == 'minimap' else 25
+        expected_inputs = 90 if self.observation_mode == 'minimap' else 25
         if self.neat_config.genome_config.num_inputs != expected_inputs:
             print(f"FATAL ERROR: NEAT config 'num_inputs' ({self.neat_config.genome_config.num_inputs}) "
                   f"does not match expected inputs for observation_mode='{self.observation_mode}' ({expected_inputs}).")

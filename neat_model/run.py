@@ -130,10 +130,7 @@ class RunGenome:
         try:
             obs = self.env.reset()
             self.env.debug = self.debug
-            if self.env.current_gen < self.env.EASY_GEN:
-                self.env.game_state.no_ghosts = True
-                print("INFO: Ghosts disabled for early generation.")
-
+            
             done = False
             total_reward = 0
             step_count = 0
@@ -165,15 +162,20 @@ class RunGenome:
                 # Riduci il time.sleep per una visualizzazione più fluida
                 time.sleep(1 / 120) # 120 FPS target
 
-            EXP_BONUS = 1 # Riconferma il valore
+            EXP_BONUS = 4 # Riconferma il valore
             exploration_reward = self.env.tot_visited * EXP_BONUS
             total_reward += exploration_reward
 
             print("\n--- Game Run Finished ---")
             print(f"Exploration bonus added: {exploration_reward}")
-            reason = "Max steps reached"
+            reason = "Unknown"
             if done:
-                 reason = "Completed level" if self.env.game_state.level_complete else "Pacman died"
+                if self.env.game_state.level_complete:
+                    reason = "Completed level" 
+                elif self.env.max_reached:
+                    reason = "Max steps reached" 
+                else:
+                    reason = "Pacman died"
             elif not running:
                  reason = "Window closed"
             print(f"Reason: {reason}")

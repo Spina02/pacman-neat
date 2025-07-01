@@ -191,6 +191,69 @@ class RunGenome:
             if self.env:
                 self.env.close()
             print("Environment closed.")
+            
+def run(config_file, checkpoint_file, observation_mode, best, max_steps=None, debug=0):
+    """
+    Initializes and runs a single genome against the Pacman environment.
+
+    Args:
+        config_file (str): Path to the NEAT configuration file.
+        checkpoint_file (str): Path to the checkpoint or pickled genome to load.
+        observation_mode (str): The observation mode to use ('simple' or 'minimap').
+        best (bool): If True, loads the latest best genome for the given observation mode.
+        max_steps (int, optional): Maximum number of steps to run the simulation. Defaults to None.
+        debug (int, optional): Debug level for verbose output. Defaults to 0.
+    """
+    pygame.init()
+    pygame.display.set_caption("NEAT Pacman - Genome Run")
+
+    genome_to_load_path = checkpoint_file
+    is_best_overall = best
+
+    if best:
+        if not os.path.isdir(DEFAULT_BEST_GENOME_DIR):
+            print(f"Error: Best genome directory not found at '{DEFAULT_BEST_GENOME_DIR}'.")
+            print("Please run training first to generate best genomes.")
+            sys.exit(1)
+
+        bests = [f for f in os.listdir(DEFAULT_BEST_GENOME_DIR)
+                 if f.startswith(f"best_{observation_mode}_gen") and f.endswith(".pkl")]
+        if not bests:
+            print(f"No matching best genome found for mode '{observation_mode}' in '{DEFAULT_BEST_GENOME_DIR}'.")
+            sys.exit(1)
+
+        bests.sort(
+            key=lambda f: os.path.getmtime(os.path.join(DEFAULT_BEST_GENOME_DIR, f)),
+            reverse=True
+        )
+        genome_to_load_path = os.path.join(DEFAULT_BEST_GENOME_DIR, bests[0])
+        print(f"Using latest best genome: {genome_to_load_path}")
+    
+    elif not checkpoint_file:
+        print("Error: You must specify a checkpoint file to load (e.g., --restore_checkpoint) if not using --best.")
+        sys.exit(1)
+
+    try:
+        runner = RunGenome(config_path=config_file,
+                           genome_to_load=genome_to_load_path,
+                           observation_mode=observation_mode,
+                           is_best_overall=is_best_overall,
+                           debug=debug)
+        runner.run(max_steps=max_steps)
+    except (FileNotFoundError, TypeError) as e:
+        print(f"Error: Could not find or load file. {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+        pygame.quit()
+        sys.exit(1)
+    finally:
+        if pygame.get_init():
+            pygame.quit()
+        print("Pygame quit and resources released.")
+
 
 if __name__ == "__main__":
 
@@ -211,44 +274,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    pygame.init()
-    pygame.display.set_caption("NEAT Pacman - Genome Run")
-
-    genome_to_load_path = args.load_file
-    is_best_overall = args.best
-
-    # If --best is specified, check for the latest best genome
-    if args.best:
-        # Find pickle files beginning with "best_{args.observation_mode}_gen"
-        bests = [f for f in os.listdir(DEFAULT_BEST_GENOME_DIR)
-                 if f.startswith(f"best_{args.observation_mode}_gen") and f.endswith(".pkl")]
-        if not bests:
-            print("No matching best genome found in best_genomes directory.")
-            sys.exit(1)
-
-        # Sort by modification time (descending) to pick the latest file
-        bests.sort(
-            key=lambda f: os.path.getmtime(os.path.join(DEFAULT_BEST_GENOME_DIR, f)),
-            reverse=True
-        )
-        # Use the most recent file
-        genome_to_load_path = os.path.join(DEFAULT_BEST_GENOME_DIR, bests[0])
-        print(f"Using latest best genome: {genome_to_load_path}")
-
-    try:
-        runner = RunGenome(config_path=args.config,
-                           genome_to_load=genome_to_load_path,
-                           observation_mode=args.observation_mode,
-                           is_best_overall=is_best_overall,
-                           debug=args.debug)
-        runner.run(max_steps=args.max_steps)
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        pygame.quit()
-        sys.exit(1)
-
-    pygame.quit()
-    print("Pygame quit.")
+    run(
+        config_file=args.config,
+        checkpoint_file=args.load_file,
+        observation_mode=args.observation_mode,
+        best=args.best,
+        max_steps=args.max_steps,
+        debug=args.debug
+    )

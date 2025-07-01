@@ -17,25 +17,29 @@ random.seed(seed)
 np.random.seed(seed)
 
 _pool = None
-_environments = []
+_worker_env = None
 
 CONFIG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", 'config'))
 CHECKPOINT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", 'checkpoints'))
 BEST_GENOME_DIR = os.path.join(CHECKPOINT_DIR, 'best_genomes')
 
+def init_worker(render_mode, obs_mode):
+    """
+    Initialization function for each process in the pool.
+    Creates a single environment instance for this process.
+    """
+    global _worker_env
+    # print(f"Initializing worker process {os.getpid()}...")
+    # We import game_env INSIDE the worker to avoid issues with 'spawn'
+    from game import game_env as game
+    _worker_env = game.PacmanEnvironment(render=render_mode, observation_mode=obs_mode)
+    _worker_env._is_worker = True # Flag to handle pygame shutdown
+
 def cleanup_resources():
     """Cleanup function to be called at exit"""
-    global _pool, _environments
+    global _pool
     
     print("Cleaning up resources...")
-    
-    # Clean up environments
-    for env in _environments:
-        if env:
-            try:
-                env.close()
-            except:
-                pass
     
     # Clean up pool
     if _pool:
@@ -53,7 +57,6 @@ def cleanup_resources():
             pass
     
     # Force garbage collection
-    _environments.clear()
     _pool = None
     gc.collect()
 
@@ -78,15 +81,30 @@ def _handle_sigint(pool):
     return handler
 
 def evaluate_genome(args):
-    current_gen, genome_id, genome, config, render, observation_mode = args
-    env = None
+    """
+    Evaluation function that now reuses the environment from its worker.
+    """
+    global _worker_env
+    current_gen, genome_id, genome, config = args
+
+    # Ensure the environment has been initialized
+    if _worker_env is None:
+        print(f"FATAL: Worker {os.getpid()} environment not initialized!")
+        return (genome_id, -float('inf')) # Return a terrible fitness
+    
+    env = _worker_env # Use the worker's environment
+
     try:
-        env = game.PacmanEnvironment(render, observation_mode)
         env.current_gen = current_gen
         env.debug = 0
         state = env.reset()
             
-        net = neat.nn.FeedForwardNetwork.create(genome, config)
+        # Create the appropriate NEAT network (FF or Recurrent)
+        if config.genome_config.feed_forward:
+            net = neat.nn.FeedForwardNetwork.create(genome, config)
+        else:
+            net = neat.nn.RecurrentNetwork.create(genome, config)
+            
         done = False
         total_reward = 0
         genome.fitness = 0
@@ -98,18 +116,18 @@ def evaluate_genome(args):
         EXP_BONUS = 4
         reward = env.tot_visited * EXP_BONUS
         total_reward += reward
-        genome.fitness = total_reward
         if env.debug >= 3: print(f"Exploration bonus: {reward}")
     except Exception as e:
-        print(f"Error in evaluating genome {genome_id}: {e}")
-        total_reward = 0
-        if env:
-            env.close()
-        exit(-1)
+        print(f"Error in evaluating genome {genome_id} in worker {os.getpid()}: {e}")
+        import traceback
+        traceback.print_exc()
+        total_reward = -float('inf')
+    
+    # We don't close the environment here, it will be reused.
     return (genome_id, total_reward)
 
 class Trainer:
-    def __init__(self, neat_config_file=CONFIG_PATH, gen=1000, cores=2, resume_from=None, render=False, observation_mode='simple'):
+    def __init__(self, neat_config_file=CONFIG_PATH, gen=2000, cores=15, resume_from=None, render=False, observation_mode='minimap'):
         self.gen = gen
         self.cores = cores
         self.render = render
@@ -125,7 +143,7 @@ class Trainer:
             neat_config_file
         )
 
-        expected_inputs = 90 if self.observation_mode == 'minimap' else 25
+        expected_inputs = 90 if self.observation_mode == 'minimap' else 26
         if self.neat_config.genome_config.num_inputs != expected_inputs:
             print(f"FATAL ERROR: NEAT config 'num_inputs' ({self.neat_config.genome_config.num_inputs}) "
                   f"does not match expected inputs for observation_mode='{self.observation_mode}' ({expected_inputs}).")
@@ -161,11 +179,17 @@ class Trainer:
         self.population.add_reporter(BestGenomeSaver(save_path=BEST_GENOME_DIR, filename_prefix=f'best_{self.observation_mode}', generation = self.current_gen))
 
         # Initialize the multiprocessing pool if cores > 1
+        global _pool
         self.pool = None
         if self.cores > 1:
             # Use 'spawn' context for better compatibility across platforms, especially with Pygame
             mp_context = mp.get_context('spawn')
-            self.pool = mp_context.Pool(processes=self.cores)
+            self.pool = mp_context.Pool(
+                processes=self.cores,
+                initializer=init_worker,
+                initargs=(self.render, self.observation_mode) # Arguments for initializer
+            )
+            _pool = self.pool # Assign to global for cleanup handler
             print(f"Multiprocessing pool initialized with {self.cores} cores (context: spawn).")
         else:
             print("Running evaluation sequentially (cores=1).")
@@ -178,7 +202,7 @@ class Trainer:
         # Prepare arguments for each genome evaluation
         # Pass the current generation number from the population object
         args_list = [
-            (self.population.generation, genome_id, genome, config, self.render, self.observation_mode)
+            (self.population.generation, genome_id, genome, config)
             for genome_id, genome in genomes
         ]
 
@@ -186,7 +210,11 @@ class Trainer:
             # Parallel evaluation using the pool
             results = self.pool.map(evaluate_genome, args_list)
         else:
-            # Sequential evaluation (for cores=1 or debugging)
+            # Sequential evaluation needs its own environment
+            global _worker_env
+            if _worker_env is None:
+                from game import game_env as game
+                _worker_env = game.PacmanEnvironment(self.render, self.observation_mode)
             results = [evaluate_genome(args) for args in args_list]
 
         # Update genome fitness based on results
@@ -299,6 +327,7 @@ if __name__ == "__main__":
             [f for f in os.listdir(args.checkpoint_dir) if f.startswith(checkpoint_prefix)],
             key=lambda x: int(x.split('-')[-1]) # Sort by generation number
         )
+        print(f"Checkpoints: {checkpoints}")
         if checkpoints:
             args.restore_checkpoint = os.path.join(args.checkpoint_dir, checkpoints[-1])
             print(f"Found latest checkpoint for mode '{args.observation_mode}': {args.restore_checkpoint}")

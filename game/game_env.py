@@ -4,7 +4,7 @@ import sys
 import numpy as np
 
 pacman_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "pacman"))
-if pacman_path not in sys.path:
+if (pacman_path not in sys.path):
     sys.path.insert(0, pacman_path)
 
 from src.game.state_management import GameState
@@ -50,8 +50,22 @@ class PacmanEnvironment:
         self.debug = 0
         self.max_reached = False
         self.ghost_order = ['blinky', 'pinky', 'inky', 'clyde']
-        self.EASY_GEN = [50, 200, 300, 400] # Generations at which each ghost is added
-        self.MAX_EPISODE_STEPS = 2000 # Default max steps per episode
+        self.EASY_GEN = [0, 500, 750, 1000] # Generations at which each ghost is added
+        self.MAX_EPISODE_STEPS = 5000 # Default max steps per episode
+        self.wall_distance_map = None # Pre-computed wall distances
+        self.wall_code = None  # Will be set in reset()
+        self.dot_code = None  # "dot"  tile code
+        self.power_code = None  # "power" tile code
+        # --------------------------------------------------------------
+        # Cached dynamic item positions (initialised in reset())
+        # --------------------------------------------------------------
+        self.dot_positions = None   # np.ndarray of dot coordinates (rows, cols)
+        self.power_positions = None # np.ndarray of power-up coordinates
+
+        # Pre-compute reciprocals of grid dimensions to replace repeated division
+        self._inv_num_rows = 1.0 / NUM_ROWS
+        self._inv_num_cols = 1.0 / NUM_COLS
+        self.progress_checkpoints = {}
 
     #?--------------------------------------------------------------
     #?                    Initialization functions
@@ -64,28 +78,30 @@ class PacmanEnvironment:
         """
         # Setup for headless mode BEFORE pygame.init()
         if not self.render_enabled:
-            if not pygame.get_init():
                 os.environ["SDL_VIDEODRIVER"] = "dummy"
-                pygame.init()
+                
+        if not pygame.get_init():
+            pygame.init()
+            if not self.render_enabled:
                 # Setting a dummy display might still be needed by some pygame parts
                 pygame.display.set_mode((1, 1), pygame.NOFRAME)
-            self.screen = pygame.Surface((1024, 768)) # Create a surface for drawing if needed
-        else:
-            if not pygame.get_init():
-                pygame.init()
+        
+        if self.render_enabled:
             self.screen = pygame.display.set_mode((1024, 768))
+        else:
+            self.screen = pygame.Surface((1024, 768)) # Create a surface for drawing if needed
             
         self.game_state = GameState()
         self.game_state.sound_enabled = False
-        # If rendering is enabled but screen wasn't created (after headless), create it
-        if self.render_enabled and self.screen is None:
-             self.screen = pygame.display.set_mode((1024, 768))
-        # If not rendering and screen exists (from previous render run), make it a surface
-        elif not self.render_enabled and self.screen is not None and not isinstance(self.screen, pygame.Surface):
-             self.screen = pygame.Surface((1024, 768))
-        # Ensure screen is a valid surface if not rendering
-        elif not self.render_enabled and self.screen is None:
-             self.screen = pygame.Surface((1024, 768))
+        # # If rendering is enabled but screen wasn't created (after headless), create it
+        # if self.render_enabled and self.screen is None:
+        #      self.screen = pygame.display.set_mode((1024, 768))
+        # # If not rendering and screen exists (from previous render run), make it a surface
+        # elif not self.render_enabled and self.screen is not None and not isinstance(self.screen, pygame.Surface):
+        #      self.screen = pygame.Surface((1024, 768))
+        # # Ensure screen is a valid surface if not rendering
+        # elif not self.render_enabled and self.screen is None:
+        #      self.screen = pygame.Surface((1024, 768))
 
         self.event_handler = EventHandler(self.screen, self.game_state)
         self.all_sprites = pygame.sprite.Group()
@@ -112,10 +128,30 @@ class PacmanEnvironment:
         rows, cols = self.game_state.level_matrix_np.shape
         self.visits = np.zeros((rows, cols), dtype=int)
         
+        # --------------------------------------------------------------
+        # Cache tile codes once per reset (micro-optimisation)
+        # --------------------------------------------------------------
+        self.wall_code  = self.game_state.tile_encoding.get("wall", 0)
+        self.dot_code   = self.game_state.tile_encoding.get("dot", 1)
+        self.power_code = self.game_state.tile_encoding.get("power", 2)
+        
+        # Pre-compute wall distances for the whole level grid
+        self._precompute_wall_distances()
+        
+        # Cache initial dot / power-up positions to avoid np.argwhere in hot path
+        grid = self.game_state.level_matrix_np
+        self.dot_positions   = np.argwhere(grid == self.dot_code)
+        self.power_positions = np.argwhere(grid == self.power_code)
+        
+        if self.current_gen < self.EASY_GEN[0]:
+            self.MAX_EPISODE_STEPS = 2000
+            
         for i in range(len(self.ghost_order)):
-                if self.current_gen < self.EASY_GEN[i]:
-                    self.game_state.no_ghosts[self.ghost_order[i]] = True
-
+            if self.current_gen < self.EASY_GEN[i]:
+                self.game_state.no_ghosts[self.ghost_order[i]] = True
+            else:
+                self.game_state.no_ghosts[self.ghost_order[i]] = False
+                
         #START_MAX_STEPS = 2000
         #FINAL_MAX_STEPS = 4000
         #GENS_TO_REACH_FINAL = 300 # Reach final limit after 200 generations
@@ -124,14 +160,20 @@ class PacmanEnvironment:
         #    self.MAX_EPISODE_STEPS = int(START_MAX_STEPS + (FINAL_MAX_STEPS - START_MAX_STEPS) * (self.current_gen / GENS_TO_REACH_FINAL))
         #else:
         #    self.MAX_EPISODE_STEPS = FINAL_MAX_STEPS
-
-        # Get initial observation based on the configured mode
-        obs = self.get_observation(mode=self.observation_mode) # <-- Use stored mode
-
-        # Ensure remaining_dots is calculated based on the initial state
-        dot_code = self.game_state.tile_encoding.get("dot", 1)
-        self.total_dots = np.count_nonzero(self.game_state.level_matrix_np == dot_code)
+        
+        # Use cached dot positions for efficiency
+        self.total_dots = len(self.dot_positions)
         self.remaining_dots = self.total_dots
+        
+        self.progress_checkpoints = {
+            0.9: False,
+            0.75: False,
+            0.5: False,
+            0.25: False
+        }
+        
+        # Get initial observation based on the configured mode
+        obs = self.get_observation(mode=self.observation_mode)
 
         return obs
 
@@ -167,8 +209,8 @@ class PacmanEnvironment:
         # 2) Update one frame
         reward = 0.0
         done = False
-        # Get the dot code from the game state
-        dot_code = self.game_state.tile_encoding.get("dot", 1)
+        # Use cached dot code
+        dot_code = self.dot_code
 
         #? replication of "GameRun.main()" loop but only for 1 iteration
         # Handle Pygame events (important even in headless for QUIT signals etc.)
@@ -186,12 +228,17 @@ class PacmanEnvironment:
         # Update Pacman's grid position AFTER movement
         self._update_pacman_grid_position()
 
+        # --------------------------------------------------------------
+        # Refresh cached dot / power-up coordinates after state update
+        # --------------------------------------------------------------
+        self._refresh_item_positions()
+
         # Get the current observation
         obs = self.get_observation(mode=self.observation_mode)
 
-        # Update remaining dots count AFTER step and BEFORE reward calculation
+        # Using cached arrays we can compute remaining dots quickly
         prev_remaining_dots = self.remaining_dots
-        self.remaining_dots = np.count_nonzero(self.game_state.level_matrix_np == dot_code)
+        self.remaining_dots = len(self.dot_positions)
         dots_eaten_this_step = prev_remaining_dots - self.remaining_dots
         
         # Determine if done
@@ -235,6 +282,53 @@ class PacmanEnvironment:
         info = {} # Placeholder for additional info if needed later
         return obs, reward, done, info
 
+
+    # Helper function to pre-compute wall distances for the entire grid
+    def _precompute_wall_distances(self):
+        """
+        Calculates the normalized distance to the nearest wall in 4 directions
+        for every non-wall cell in the grid. Results are stored in a lookup table.
+        This is done once per level reset to optimize the get_observation method.
+        """
+        grid = self.game_state.level_matrix_np
+        rows, cols = grid.shape
+        wall_code = self.wall_code  # Cached value
+        self.wall_distance_map = np.zeros((rows, cols, 4), dtype=np.float32)
+
+        for r in range(rows):
+            for c in range(cols):
+                if grid[r, c] == wall_code:
+                    continue  # Distances are 0 for wall cells
+
+                # dist_left (Equivalent to distance_to_wall(r, c, 0, -1))
+                dist = 0
+                for i in range(c - 1, -1, -1):
+                    if grid[r, i] == wall_code: break
+                    dist += 1
+                self.wall_distance_map[r, c, 0] = dist / cols
+
+                # dist_right (Equivalent to distance_to_wall(r, c + 1, 0, 1))
+                dist = 0
+                # Original logic started scan from c + 2
+                for i in range(c + 2, cols):
+                    if grid[r, i] == wall_code: break
+                    dist += 1
+                self.wall_distance_map[r, c, 1] = dist / cols
+
+                # dist_up (Equivalent to distance_to_wall(r, c, -1, 0))
+                dist = 0
+                for i in range(r - 1, -1, -1):
+                    if grid[i, c] == wall_code: break
+                    dist += 1
+                self.wall_distance_map[r, c, 2] = dist / rows
+
+                # dist_down (Equivalent to distance_to_wall(r + 1, c, 1, 0))
+                dist = 0
+                # Original logic started scan from r + 2
+                for i in range(r + 2, rows):
+                    if grid[i, c] == wall_code: break
+                    dist += 1
+                self.wall_distance_map[r, c, 3] = dist / rows
 
     # Helper function to update Pacman's grid position
     def _update_pacman_grid_position(self):
@@ -281,19 +375,24 @@ class PacmanEnvironment:
                     - Normalized distances to walls in 4 directions (left, right, up, down) [4 elements]
                     - Pacman's power-up state (1.0 if active, 0.0 otherwise) [1 element]
             if mode == "minimap":
-                numpy.ndarray: Observation vector (total 24 elements + 49 minimap elements) containing:
+                numpy.ndarray: Observation vector (total 24 elements + 64 minimap elements) containing:
         """
+        # Use local variables for frequently accessed attributes
+        game_state = self.game_state
+        grid = game_state.level_matrix_np
+        pacman_r_grid, pacman_c_grid = self.py, self.px
+        pacman_r_float, pacman_c_float = self.py_float, self.px_float
 
         if mode == "simple" or mode == "minimap":
-            pacman_grid = np.array([self.py, self.px])
+            pacman_grid = np.array([pacman_r_grid, pacman_c_grid])
 
             # Normalize Pacman position
-            self.pacman_pos = np.array([self.py_float, self.px_float])
+            self.pacman_pos = np.array([pacman_r_float, pacman_c_float])
 
-            # (2) Relative positions of ghosts
-            ghost_rel = - np.ones(8)  # 4 ghosts * 2 coords
-            if self.game_state.no_ghosts != [False, False, False, False]:
-                ghosts = self.game_state.ghosts  # dict: ghost_name -> (gx, gy) in pixels
+            # (2) Relative positions of ghosts (GRID BASED)
+            ghost_rel = -np.ones(8)  # 4 ghosts * 2 coords
+            if not all(game_state.no_ghosts.values()):
+                ghosts = game_state.ghosts  # dict: ghost_name -> (gx, gy) in pixels
                 for i, name in enumerate(self.ghost_order):
                     if name in ghosts:
                         gx, gy = ghosts[name]
@@ -304,69 +403,44 @@ class PacmanEnvironment:
             # If the ghost doesn't exist or isn't placed, leave (-1,-1)
 
             # (3) Ghost scared bits
-            ghost_scared_bits = np.array([1.0 if self.game_state.scared_ghosts[self.game_state.ghost_encoding[name]] else 0.0 for name in self.ghost_order], dtype=np.float32)
+            ghost_scared_bits = np.array([1.0 if game_state.scared_ghosts[game_state.ghost_encoding[name]] else 0.0 for name in self.ghost_order], dtype=np.float32)
 
             # (4) Compute the vector to the nearest dot.
-            grid = self.game_state.level_matrix_np  # 2D array: 0=wall,1=dot,2=power...
-            dot_code = self.game_state.tile_encoding.get("dot", 1)
 
-            # # Find all cells containing a dot
-            dots = np.argwhere(grid == dot_code)
+            # Use cached dot positions (updated each step)
+            dots = self.dot_positions
             if dots.size > 0:
-                # Calculate Euclidean distances from pacman_grid [row, col] to all dots
-                distances = np.linalg.norm(dots - self.pacman_pos, axis=1)
-                idx = np.argmin(distances)
+                # Compute squared distances (cheaper than sqrt) – sqrt not needed for argmin
+                d_sq = np.sum((dots - self.pacman_pos) ** 2, axis=1)
+                idx = np.argmin(d_sq)
                 nearest_dot_grid = dots[idx] # Grid coords [row, col] of nearest dot
                 # Vector from Pacman to dot, normalized
-                closest_dot_vec = (nearest_dot_grid - self.pacman_pos) / np.array([NUM_ROWS, NUM_COLS])
+                diff = nearest_dot_grid - self.pacman_pos
+                closest_dot_vec = np.array([diff[0] * self._inv_num_rows, diff[1] * self._inv_num_cols])
             else:
                 closest_dot_vec = np.array([-1, -1])
 
             # (5) Nearest powerup (if any)
-            powerup_code = self.game_state.tile_encoding.get("power", 2)
-            powerups = np.argwhere(grid == powerup_code)
+            # Use cached power-up positions
+            powerups = self.power_positions
             if powerups.size > 0:
-                distances = np.linalg.norm(powerups - pacman_grid, axis=1)
-                idx = np.argmin(distances)
+                d_sq = np.sum((powerups - self.pacman_pos) ** 2, axis=1)
+                idx = np.argmin(d_sq)
                 nearest_powerup_grid = powerups[idx]
-                closest_powerup_vec = (nearest_powerup_grid - self.pacman_pos) / np.array([NUM_ROWS, NUM_COLS])
+                diff_p = nearest_powerup_grid - self.pacman_pos
+                closest_powerup_vec = np.array([diff_p[0] * self._inv_num_rows, diff_p[1] * self._inv_num_cols])
             else:
                 closest_powerup_vec = np.array([-1, -1])
                                 
             # (6) Remaining dots
-            remaining_dots = [dots.size]
+            remaining_dots = [self.remaining_dots/self.total_dots]
 
-            # (7) Compute distances to the nearest wall in 4 directions (left, right, up, down)
-            wall_code = self.game_state.tile_encoding.get("wall", 0)
+            # (7) Get pre-computed distances to the nearest wall in 4 directions
             r, c = pacman_grid.astype(int)
-            max_rows, max_cols = grid.shape
-
-            # Function to find distance to wall
-            def distance_to_wall(start_r, start_c, dr, dc):
-                dist = 0
-                curr_r, curr_c = start_r + dr, start_c + dc
-                while 0 <= curr_r < max_rows and 0 <= curr_c < max_cols:
-                    if grid[curr_r, curr_c] == wall_code:
-                        break
-                    dist += 1
-                    curr_r += dr
-                    curr_c += dc
-                # Normalize distance by max possible distance in that direction
-                if dr == -1: max_dist = start_r # Up
-                elif dr == 1: max_dist = max_rows - 1 - start_r # Down
-                elif dc == -1: max_dist = start_c # Left
-                elif dc == 1: max_dist = max_cols - 1 - start_c # Right
-                else: max_dist = 1 # Should not happen
-                return dist / max_dist if max_dist > 0 else 0.0
-
-            dist_left  = distance_to_wall(r, c, 0, -1) # Checks columns to the left (dc=-1)
-            dist_right = distance_to_wall(r, c+1, 0, 1)  # Checks columns to the right (dc=1)
-            dist_up    = distance_to_wall(r, c, -1, 0) # Checks rows above (dr=-1)
-            dist_down  = distance_to_wall(r+1, c, 1, 0)  # Checks rows below (dr=1)
-            wall_dists = np.array([dist_left, dist_right, dist_up, dist_down])
+            wall_dists = self.wall_distance_map[r, c]
 
             # (8) Pacman powerup status
-            power_state = np.array([self.game_state.is_pacman_powered])
+            power_state = np.array([game_state.is_pacman_powered])
             
             # one hot encoding of last action
             last_action = np.zeros(4)
@@ -390,7 +464,7 @@ class PacmanEnvironment:
 
         #elif mode == "minimap":
             minimap_size = 8
-            radius = minimap_size // 2 # 4 for 8x8
+            radius = minimap_size // 2
 
             # Define encoding for different elements in the minimap
             encoding = {
@@ -411,16 +485,15 @@ class PacmanEnvironment:
             pacman_r, pacman_c = self.py, self.px
 
             # Get the full game grid and tile decodings
-            grid = self.game_state.level_matrix_np
-            tile_code_to_name = self.game_state.tile_decoding # Map code (0,1,2...) back to name ('wall', 'dot'...)
+            tile_code_to_name = game_state.tile_decoding # Map code (0,1,2...) back to name ('wall', 'dot'...)
             max_rows, max_cols = grid.shape
 
             # Fill the minimap with static elements (walls, dots, etc.)
             for r_mini in range(minimap_size):
                 for c_mini in range(minimap_size):
-                    # Calculate corresponding world grid coordinates
-                    world_r = pacman_r + (r_mini - radius + 1)
-                    world_c = pacman_c + (c_mini - radius + 1)
+                    # Calculate corresponding world grid coordinates. No +1 for even-sized map.
+                    world_r = pacman_r + (r_mini - radius)
+                    world_c = pacman_c + (c_mini - radius)
 
                     # Check if the world coordinates are within the game grid boundaries
                     if 0 <= world_r < max_rows and 0 <= world_c < max_cols:
@@ -430,33 +503,29 @@ class PacmanEnvironment:
                     # else: coordinates are out of bounds, keep the default 'out_of_bounds' value
 
             # Overlay ghosts onto the minimap
-            ghosts_pixel_coords = self.game_state.ghosts # dict: name -> (pixel_x, pixel_y)
-            start_x, start_y = self.game_state.start_pos
-            cell_w, _ = CELL_SIZE # Only need width for get_idx_from_coords assuming square cells or correct function
-            ghost_name_to_idx = self.game_state.ghost_encoding # Map name to index (0-3)
+            ghosts_pixel_coords = game_state.ghosts # dict: name -> (pixel_x, pixel_y)
+            ghost_name_to_idx = game_state.ghost_encoding # Map name to index (0-3)
 
-            for name, (gx_pix, gy_pix) in ghosts_pixel_coords.items():
-                if name not in ghost_name_to_idx: continue # Skip if ghost name is not recognized
+            for name in self.ghost_order:
+                if name in ghosts_pixel_coords and name in ghost_name_to_idx:
+                    ghost_r, ghost_c = ghosts_pixel_coords[name]
+                    
+                    # Calculate relative position to Pacman in grid terms
+                    rel_r = ghost_r - pacman_r
+                    rel_c = ghost_c - pacman_c
 
-                # Convert ghost pixel coords to grid coords
-                ghost_r, ghost_c = get_float_idx_from_coords(gx_pix, gy_pix, start_x, start_y, cell_w)
+                    # Check if the ghost is within the minimap radius
+                    if abs(rel_r) < radius and abs(rel_c) < radius:
+                        # Calculate minimap indices
+                        r_mini = rel_r + radius
+                        c_mini = rel_c + radius
 
-                # Calculate relative position to Pacman in grid terms
-                rel_r = ghost_r - pacman_r
-                rel_c = ghost_c - pacman_c
+                        # Check if the ghost is scared
+                        ghost_idx = ghost_name_to_idx[name]
+                        is_scared = game_state.scared_ghosts[ghost_idx]
 
-                # Check if the ghost is within the minimap radius
-                if abs(rel_r) <= radius and abs(rel_c) <= radius:
-                    # Calculate minimap indices
-                    r_mini = rel_r + radius
-                    c_mini = rel_c + radius
-
-                    # Check if the ghost is scared
-                    ghost_idx = ghost_name_to_idx[name]
-                    is_scared = self.game_state.scared_ghosts[ghost_idx]
-
-                    # Set the minimap cell value (ghosts overwrite static elements)
-                    minimap[r_mini, c_mini] = encoding["ghost_scared"] if is_scared else encoding["ghost_normal"]
+                        # Set the minimap cell value (ghosts overwrite static elements)
+                        minimap[r_mini, c_mini] = encoding["ghost_scared"] if is_scared else encoding["ghost_normal"]
 
             # # print the matrix for debugging
             # for row in minimap:
@@ -487,29 +556,60 @@ class PacmanEnvironment:
                 Used for features like wall distance if needed.
         """
         reward = 0.0
-        current_points = self.game_state.points
+        
+        # Use local variables for frequently accessed attributes
+        game_state = self.game_state
+        current_points = game_state.points
         action_map = {"l": 0, "r": 1, "u": 2, "d": 3}
-        current_action_int = action_map.get(self.game_state.direction)
+        current_action_int = action_map.get(game_state.direction)
         
         if self.debug >= 3:
-            print(f"Step: {self.game_state.step_count}, Pacman position: ({self.py}, {self.px}), Action: {current_action_int}")
+            print(f"Step: {game_state.step_count}, Pacman position: ({self.py}, {self.px}), Action: {current_action_int}")
 
+
+        # --- One-time Checkpoint Bonuses ---
+        eaten_dots = self.total_dots - self.remaining_dots
+        eaten_ratio = eaten_dots / self.total_dots if self.total_dots > 0 else 0
+
+        # Check from highest to lowest to award only one bonus per step
+        if eaten_ratio > 0.9 and not self.progress_checkpoints[0.9]:
+            bonus = 2000.0
+            reward += bonus
+            self.progress_checkpoints[0.9] = True
+            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 90%! +{bonus}")
+            
+        elif eaten_ratio > 0.75 and not self.progress_checkpoints[0.75]:
+            bonus = 750.0
+            reward += bonus
+            self.progress_checkpoints[0.75] = True
+            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 75%! +{bonus}")
+            
+        elif eaten_ratio > 0.5 and not self.progress_checkpoints[0.5]:
+            bonus = 500.0
+            reward += bonus
+            self.progress_checkpoints[0.5] = True
+            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 50%! +{bonus}")
+        elif eaten_ratio > 0.25 and not self.progress_checkpoints[0.25]:
+            bonus = 250.0
+            reward += bonus
+            self.progress_checkpoints[0.25] = True
+            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 25%! +{bonus}")
+        
         # 1. Cost of Living
-        COST_OF_LIVING = 0.5 #?
+        COST_OF_LIVING = -0.1 #?
         reward += COST_OF_LIVING
         if self.debug >= 3: print(f"cost of living: {COST_OF_LIVING}")
 
         # 2. Reward for Points Gained
         # multiplier proportional to eaten_dots/total_dots
-        eaten_dots = self.total_dots - self.remaining_dots
-        SCORE_MULTIPLIER = 1 + 7*(eaten_dots / self.total_dots)
+        SCORE_MULTIPLIER = 1 + 8 * (eaten_dots / self.total_dots)
         points_gain = current_points - previous_points
-
+        
         last_reward = reward
         tmp = ""
 
         # 3. Specific Event Bonuses
-        DOT_EATEN_BONUS = 5.0
+        DOT_EATEN_BONUS = 10.0
         POWER_PELLET_EATEN_BONUS = 20.0
         GHOST_EATEN_BONUS = 50.0
 
@@ -524,7 +624,7 @@ class PacmanEnvironment:
             tmp = "power up"
         elif points_gain == 25: # Pacman ate a ghost
             self.eaten_ghosts += 1
-            reward += 200 * self.eaten_ghosts * SCORE_MULTIPLIER
+            reward += 200 * self.eaten_ghosts # * SCORE_MULTIPLIER
             reward += GHOST_EATEN_BONUS
             tmp = "ghost"
         elif points_gain > 0:
@@ -534,31 +634,35 @@ class PacmanEnvironment:
 
         # 4. Penalty for Death
         DEATH_PENALTY = -1000.0
-        if self.game_state.is_pacman_dead:
+        if game_state.is_pacman_dead:
             reward += DEATH_PENALTY
             if self.debug >= 3: print(f"Pacman died, reward: {DEATH_PENALTY}")
 
         # 5. Bonus for Level Completion
         LEVEL_COMPLETE_BONUS = 10000.0 # Large bonus for completing the level
-        if self.game_state.level_complete:
+        if game_state.level_complete:
             reward += LEVEL_COMPLETE_BONUS
             if self.debug >= 3: print(f"Pacman completed the level, reward: {LEVEL_COMPLETE_BONUS}")
 
         # 6. Penalty for Getting Stuck Against Wall
         if current_observation is not None:
             STUCK_PENALTY_FACTOR = -0.2
-            STUCK_PENALTY_CAP = 2 # Limit penalty increase
+            STUCK_PENALTY_CAP = -2 # Limit penalty increase
+            STUCK_LIMIT = 200 # Limit for stuck penalty
             #MIN_STUCK_COUNT_FOR_PENALTY = 4 # Minimum stuck count to start penalty
 
             dir_decode = {"l": 0, "r": 1, "u": 2, "d": 3}
             wall_dists = current_observation[17:21]
-            current_dir_idx = dir_decode.get(self.game_state.direction)
+            current_dir_idx = dir_decode.get(game_state.direction)
 
             if current_dir_idx is not None and len(wall_dists) > current_dir_idx:
                 wall_dist = wall_dists[current_dir_idx]
                 if wall_dist < 1e-6: # Pacman is stuck against a wall
                     self.stuck_counter += 1
-                    stuck_penalty = max(STUCK_PENALTY_FACTOR * self.stuck_counter, STUCK_PENALTY_CAP)
+                    if self.stuck_counter > STUCK_LIMIT:
+                        stuck_penalty = 0
+                    else:
+                        stuck_penalty = max(STUCK_PENALTY_FACTOR * self.stuck_counter, STUCK_PENALTY_CAP)
                     reward += stuck_penalty
                     if self.debug >= 3: print(f"Pacman stuck against wall, reward: {stuck_penalty}")
                 else:
@@ -567,30 +671,33 @@ class PacmanEnvironment:
                 self.stuck_counter = 0   
                 
         # 7. Reward/Penalty for Ghost Interaction
-        GHOST_INTERACTION_FACTOR = 2.5
-        if self.game_state.no_ghosts != [False, False, False, False]:
+        GHOST_INTERACTION_FACTOR = 1
+        if not all(game_state.no_ghosts.values()):
             gh_reward = 0.0
-            pacman_r, pacman_c =  get_float_idx_from_coords(self.game_state.pacman_rect[0], self.game_state.pacman_rect[1], *self.game_state.start_pos, CELL_SIZE[0])
-            ghosts_pixel_coords = self.game_state.ghosts
-            ghost_name_to_idx = self.game_state.ghost_encoding
+            # Reuse pre-calculated float coordinates of Pacman
+            pacman_r, pacman_c = self.py_float, self.px_float
+            ghosts_pixel_coords = game_state.ghosts
+            ghost_name_to_idx = game_state.ghost_encoding
 
+            # Define a proximity threshold in grid units
+            proximity_threshold_grid = 7.0 # for squared comparison
+            proximity_threshold_grid_sq = 49.0 # for squared comparison
+                    
             for name in self.ghost_order:
                 if name in ghosts_pixel_coords and name in ghost_name_to_idx:
                     ghost_r, ghost_c = ghosts_pixel_coords[name]
                     if self.debug >= 3: print(f"Ghost {name} position: ({ghost_r}, {ghost_c}), pacman position: ({pacman_r}, {pacman_c})")
                     # Calculate grid distance (Euclidean)
-                    dist_grid = np.sqrt((ghost_r - pacman_r)**2 + (ghost_c - pacman_c)**2)
+                    dist_grid_sq = (ghost_r - pacman_r)**2 + (ghost_c - pacman_c)**2
 
-                    # Define a proximity threshold in grid units
-                    proximity_threshold_grid = 7.0
 
-                    if dist_grid < proximity_threshold_grid and dist_grid > 0: # Avoid division by zero or self-collision case
+                    if dist_grid_sq < proximity_threshold_grid_sq and dist_grid_sq > 0: # Avoid division by zero or self-collision case
                         # Closeness factor: 1 when very close, 0 at threshold
-                        closeness_factor = (proximity_threshold_grid - dist_grid) / proximity_threshold_grid
+                        closeness_factor = (proximity_threshold_grid - np.sqrt(dist_grid_sq)) / proximity_threshold_grid
 
                         # Check if the ghost is scared
                         ghost_idx = ghost_name_to_idx[name]
-                        is_scared = self.game_state.scared_ghosts[ghost_idx]
+                        is_scared = game_state.scared_ghosts[ghost_idx]
 
                         # Reward approaching scared ghosts, penalize approaching normal ghosts
                         sign = 1.0 if is_scared else -1.0
@@ -598,7 +705,7 @@ class PacmanEnvironment:
                         gh_points = sign * GHOST_INTERACTION_FACTOR * closeness_factor**2
                         gh_reward += gh_points
                         
-                        if self.debug >= 3: print(f"Pacman close to ghost {name} ({"scared" if is_scared else "not scared"}), reward: {gh_points}")
+                        if self.debug >= 3: print(f"Pacman close to ghost {name} ({"scared" if is_scared else "not scared"}), distance: {dist_grid_sq}, reward: {gh_points}")
 
             reward += gh_reward
 
@@ -650,6 +757,7 @@ class PacmanEnvironment:
             if self.debug >= 3: print(f"Pacman hasn't eaten a dot in {self.steps_since_last_dot} steps, reward: {reward - last_reward}")
       
         if self.debug >= 3: print(f"Total reward: {reward:.3f}\n")
+        
         return reward
 
 
@@ -666,6 +774,22 @@ class PacmanEnvironment:
             if pygame.get_init():
                 pygame.quit()
 
+    #?--------------------------------------------------------------
+    #?            Helper to refresh dot / power-up positions
+    #?--------------------------------------------------------------
+
+    def _refresh_item_positions(self):
+        """Removes coordinates that no longer contain dot/power-up to keep caches updated."""
+        grid = self.game_state.level_matrix_np
+
+        if self.dot_positions is not None and self.dot_positions.size > 0:
+            mask = grid[self.dot_positions[:, 0], self.dot_positions[:, 1]] == self.dot_code
+            self.dot_positions = self.dot_positions[mask]
+
+        if self.power_positions is not None and self.power_positions.size > 0:
+            mask = grid[self.power_positions[:, 0], self.power_positions[:, 1]] == self.power_code
+            self.power_positions = self.power_positions[mask]
+
 if __name__ == "__main__":
     import pygame
 
@@ -675,7 +799,7 @@ if __name__ == "__main__":
     env_minimap.current_gen = 9999
     obs_minimap = env_minimap.reset()
     print(f"Initial Minimap Observation Shape: {obs_minimap.shape}")
-    # print("Initial Minimap Observation:\n", obs_minimap.reshape(7, 7)) # Print reshaped for readability
+    # print("Initial Minimap Observation:\n", obs_minimap.reshape(8, 8)) # Print reshaped for readability
     done_minimap = False
     total_reward_minimap = 0.0
     last_action_minimap = None

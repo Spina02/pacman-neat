@@ -24,7 +24,7 @@ class PacmanEnvironment:
     returning observations and rewards, etc.
     """
 
-    def __init__(self, render : bool, obs_mode : str = 'minimap'):
+    def __init__(self, render : bool, obs_mode : str = 'minimap', debug : int = 0):
         
         #? -------------------------- Game state parameters --------------------------
         self.game_state         : GameState             = None          # GameState object
@@ -33,7 +33,7 @@ class PacmanEnvironment:
         self.all_sprites        : pygame.sprite.Group   = None          # Pygame sprite group
         self.screen_manager     : ScreenManager         = None          # ScreenManager object
         self.render_enabled     : bool                  = render        # Whether to render the game
-        self.debug              : int                   = 0             # Debug level
+        self.debug              : int                   = debug         # Debug level
         self.MAX_EPISODE_STEPS  : int                   = 5000          # Default max steps per episode
         
         #? -------------------------- Game state variables --------------------------

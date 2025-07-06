@@ -115,7 +115,7 @@ class RunGenome:
         self.network = neat.nn.FeedForwardNetwork.create(self.best_genome, self.config)
 
         print("Initializing Pacman environment for visualization...")
-        self.env = PacmanEnvironment(render=True, obs_mode=self.obs_mode)
+        self.env = PacmanEnvironment(render=True, obs_mode=self.obs_mode, debug=self.debug)
         
         print(f"Setting environment generation context to: {self.current_gen}")
         self.env.current_gen = self.current_gen

@@ -706,8 +706,10 @@ class PacmanEnvironment:
         It is a simple reward function that only rewards Pacman for surviving and eating dots.
         It is used to train the agent to learn the basic mechanics of the game.
         """
+        bonus = 250
         if self.current_gen > 2000:
             reward = self._calculate_reward(previous_points, current_observation)
+            bonus = 500
         else:
             reward = self.game_state.points - previous_points 
             reward -= 0.1 # cost of living
@@ -716,7 +718,6 @@ class PacmanEnvironment:
         eaten_ratio = eaten_dots / self.total_dots if self.total_dots > 0 else 0
 
         #? -------------------------- One-time Checkpoint Bonuses --------------------------
-        bonus = 250
         if eaten_ratio > 0.9 and not self.progress[0.9]:
             reward += 2*bonus
             self.progress[0.9] = True

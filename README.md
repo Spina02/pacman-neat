@@ -131,6 +131,7 @@ This command loads and displays the performance of a specific genome. By default
 | `--debug` | int | `0` | Sets the verbosity level for the console output during the run (from 0 to 3). |
 </details>
 
+<details>
 <summary><h3>Usage Examples</h3></summary>
 
 1. **Start a new training session:**

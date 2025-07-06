@@ -29,15 +29,15 @@ random.seed(seed)
 np.random.seed(seed)
 
 class RunGenome:
-    def __init__(self, config_path, genome_to_load, observation_mode='minimap', is_best_overall=False, debug=0):
+    def __init__(self, config_path, genome_to_load, obs_mode='minimap', is_best_overall=False, debug=0):
         self.debug = debug
-        self.observation_mode = observation_mode
+        self.obs_mode = obs_mode
         self.is_best_overall = is_best_overall
 
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"NEAT configuration not found: {config_path}")
         if not os.path.exists(genome_to_load):
-            if not is_best_overall or not genome_to_load.endswith(f'best_{observation_mode}_latest.pkl'):
+            if not is_best_overall or not genome_to_load.endswith(f'best_{obs_mode}_latest.pkl'):
                  raise FileNotFoundError(f"Genome file or checkpoint not found: {genome_to_load}")
 
         self.config_path = config_path
@@ -115,7 +115,7 @@ class RunGenome:
         self.network = neat.nn.FeedForwardNetwork.create(self.best_genome, self.config)
 
         print("Initializing Pacman environment for visualization...")
-        self.env = PacmanEnvironment(render=True, observation_mode=self.observation_mode)
+        self.env = PacmanEnvironment(render=True, obs_mode=self.obs_mode)
         
         print(f"Setting environment generation context to: {self.current_gen}")
         self.env.current_gen = self.current_gen
@@ -189,14 +189,14 @@ class RunGenome:
                 self.env.close()
             print("Environment closed.")
             
-def run(config_file, checkpoint_file, observation_mode, best, max_steps=None, debug=0):
+def run(config_file, checkpoint_file, obs_mode, best, max_steps=None, debug=0):
     """
     Initializes and runs a single genome against the Pacman environment.
 
     Args:
         config_file (str): Path to the NEAT configuration file.
         checkpoint_file (str): Path to the checkpoint or pickled genome to load.
-        observation_mode (str): The observation mode to use ('simple' or 'minimap').
+        obs_mode (str): The observation mode to use ('simple' or 'minimap').
         best (bool): If True, loads the latest best genome for the given observation mode.
         max_steps (int, optional): Maximum number of steps to run the simulation. Defaults to None.
         debug (int, optional): Debug level for verbose output. Defaults to 0.
@@ -214,9 +214,9 @@ def run(config_file, checkpoint_file, observation_mode, best, max_steps=None, de
             sys.exit(1)
 
         bests = [f for f in os.listdir(DEFAULT_BEST_GENOME_DIR)
-                 if f.startswith(f"best_{observation_mode}_gen") and f.endswith(".pkl")]
+                 if f.startswith(f"best_{obs_mode}_gen") and f.endswith(".pkl")]
         if not bests:
-            print(f"No matching best genome found for mode '{observation_mode}' in '{DEFAULT_BEST_GENOME_DIR}'.")
+            print(f"No matching best genome found for mode '{obs_mode}' in '{DEFAULT_BEST_GENOME_DIR}'.")
             sys.exit(1)
 
         bests.sort(
@@ -227,13 +227,13 @@ def run(config_file, checkpoint_file, observation_mode, best, max_steps=None, de
         print(f"Using latest best genome: {genome_to_load_path}")
     
     elif not checkpoint_file:
-        print("Error: You must specify a checkpoint file to load (e.g., --restore_checkpoint) if not using --best.")
+        print("Error: You must specify a checkpoint file to load (e.g., --checkpoint) if not using --best.")
         sys.exit(1)
 
     try:
         runner = RunGenome(config_path=config_file,
                            genome_to_load=genome_to_load_path,
-                           observation_mode=observation_mode,
+                           obs_mode=obs_mode,
                            is_best_overall=is_best_overall,
                            debug=debug)
         runner.run(max_steps=max_steps)

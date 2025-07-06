@@ -9,8 +9,8 @@ def main():
     parser.add_argument('--config',             type=str, default='config',         help='NEAT configuration file')
     parser.add_argument('--generations',        type=int, default=2000,              help='Number of generations to run')
     parser.add_argument('--checkpoint_dir',     type=str, default='checkpoints',    help='Directory to save checkpoints')
-    parser.add_argument('--restore_checkpoint', type=str, default=None,             help='Checkpoint file to restore from')
-    parser.add_argument('--observation_mode',   type=str, default='minimap',        help='Observation mode for the agent',  
+    parser.add_argument('--checkpoint', type=str, default=None,             help='Checkpoint file to restore from')
+    parser.add_argument('--obs_mode',   type=str, default='minimap',        help='Observation mode for the agent',  
                                                           choices=['simple', 'minimap'])
     parser.add_argument('--cores',              type=int, default=15,                help='Number of cores to use for training')
     parser.add_argument('--reset',              type=bool, default=False,           help='Reset the checkpoint directory')
@@ -25,8 +25,8 @@ def main():
     if args.mode == 'train':
         # Handle reset flag
         if args.reset:
-            print(f"Resetting checkpoints for mode '{args.observation_mode}' in {args.checkpoint_dir}...")
-            prefix_to_delete = f'checkpoint-{args.observation_mode}-'
+            print(f"Resetting checkpoints for mode '{args.obs_mode}' in {args.checkpoint_dir}...")
+            prefix_to_delete = f'checkpoint-{args.obs_mode}-'
             files_deleted = 0
             if not os.path.exists(args.checkpoint_dir):
                 os.makedirs(args.checkpoint_dir)
@@ -47,25 +47,25 @@ def main():
                         except OSError as e:
                             print(f"Error deleting file {f}: {e}")
                 print(f"Deleted {files_deleted} checkpoint files.")
-                args.restore_checkpoint = None # Ensure we don't try to restore after reset
+                args.checkpoint = None # Ensure we don't try to restore after reset
 
         # Find the latest checkpoint if not specified
-        if args.restore_checkpoint is None:
-            checkpoint_prefix = f'checkpoint-{args.observation_mode}-'
+        if args.checkpoint is None:
+            checkpoint_prefix = f'checkpoint-{args.obs_mode}-'
             checkpoints = sorted(
                 [f for f in os.listdir(args.checkpoint_dir) if f.startswith(checkpoint_prefix)],
                 key=lambda x: int(x.split('-')[-1]) # Sort by generation number
             )
             print(f"Checkpoints: {checkpoints}")
             if checkpoints:
-                args.restore_checkpoint = os.path.join(args.checkpoint_dir, checkpoints[-1])
-                print(f"Found latest checkpoint for mode '{args.observation_mode}': {args.restore_checkpoint}")
+                args.checkpoint = os.path.join(args.checkpoint_dir, checkpoints[-1])
+                print(f"Found latest checkpoint for mode '{args.obs_mode}': {args.checkpoint}")
             else:
-                print(f"No checkpoints found for mode '{args.observation_mode}'. Starting new training.")
+                print(f"No checkpoints found for mode '{args.obs_mode}'. Starting new training.")
 
         trainer.run(
-            restore_checkpoint= args.restore_checkpoint,
-            observation_mode=   args.observation_mode,
+            checkpoint= args.checkpoint,
+            obs_mode=   args.obs_mode,
             config_file=        args.config,
             generations=        args.generations,
             render=             args.render,
@@ -75,8 +75,8 @@ def main():
     elif args.mode == 'run':
         run.run(
             config_file=        args.config,
-            checkpoint_file=    args.restore_checkpoint,
-            observation_mode=   args.observation_mode,
+            checkpoint_file=    args.checkpoint,
+            obs_mode=   args.obs_mode,
             best=               args.best,
             max_steps=          args.max_steps,
             debug=              args.debug

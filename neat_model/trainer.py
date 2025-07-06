@@ -29,7 +29,7 @@ def init_worker(render_mode, obs_mode):
     """
     global _worker_env
     from game import game_env as game
-    _worker_env = game.PacmanEnvironment(render=render_mode, observation_mode=obs_mode)
+    _worker_env = game.PacmanEnvironment(render=render_mode, obs_mode=obs_mode)
     _worker_env._is_worker = True # Flag to handle pygame shutdown
 
 def cleanup_resources():
@@ -124,13 +124,13 @@ def evaluate_genome(args):
     return (genome_id, total_reward)
 
 class Trainer:
-    def __init__(self, neat_config_file=CONFIG_PATH, gen=2000, cores=15, resume_from=None, render=False, observation_mode='minimap'):
+    def __init__(self, neat_config_file=CONFIG_PATH, gen=2000, cores=15, resume_from=None, render=False, obs_mode='minimap'):
         self.gen = gen
         self.cores = cores
         self.render = render
-        self.observation_mode = observation_mode # Store observation mode
+        self.obs_mode = obs_mode # Store observation mode
 
-        print(f"Initializing Trainer with Observation Mode: {self.observation_mode}")
+        print(f"Initializing Trainer with Observation Mode: {self.obs_mode}")
 
         self.neat_config = neat.Config(
             neat.DefaultGenome,
@@ -140,10 +140,10 @@ class Trainer:
             neat_config_file
         )
 
-        expected_inputs = 90 if self.observation_mode == 'minimap' else 26
+        expected_inputs = 90 if self.obs_mode == 'minimap' else 26
         if self.neat_config.genome_config.num_inputs != expected_inputs:
             print(f"FATAL ERROR: NEAT config 'num_inputs' ({self.neat_config.genome_config.num_inputs}) "
-                  f"does not match expected inputs for observation_mode='{self.observation_mode}' ({expected_inputs}).")
+                  f"does not match expected inputs for obs_mode='{self.obs_mode}' ({expected_inputs}).")
             print("Please update your NEAT config file ('config') and restart.")
             sys.exit(1)
 
@@ -168,12 +168,12 @@ class Trainer:
         if not os.path.exists(CHECKPOINT_DIR):
             print(f"Creating checkpoint directory: {CHECKPOINT_DIR}")
             os.makedirs(CHECKPOINT_DIR)
-        prefix = os.path.join(CHECKPOINT_DIR, f'checkpoint-{self.observation_mode}-') # Include mode in checkpoint name
+        prefix = os.path.join(CHECKPOINT_DIR, f'checkpoint-{self.obs_mode}-') # Include mode in checkpoint name
         self.population.add_reporter(
             neat.Checkpointer(generation_interval=5, filename_prefix=prefix)
         )
         self.population.add_reporter(neat.StatisticsReporter())
-        self.population.add_reporter(BestGenomeSaver(save_path=BEST_GENOME_DIR, filename_prefix=f'best_{self.observation_mode}', generation = self.current_gen))
+        self.population.add_reporter(BestGenomeSaver(save_path=BEST_GENOME_DIR, filename_prefix=f'best_{self.obs_mode}', generation = self.current_gen))
 
         # Initialize the multiprocessing pool if cores > 1
         global _pool
@@ -184,7 +184,7 @@ class Trainer:
             self.pool = mp_context.Pool(
                 processes=self.cores,
                 initializer=init_worker,
-                initargs=(self.render, self.observation_mode) # Arguments for initializer
+                initargs=(self.render, self.obs_mode) # Arguments for initializer
             )
             _pool = self.pool # Assign to global for cleanup handler
             print(f"Multiprocessing pool initialized with {self.cores} cores (context: spawn).")
@@ -211,7 +211,7 @@ class Trainer:
             global _worker_env
             if _worker_env is None:
                 from game import game_env as game
-                _worker_env = game.PacmanEnvironment(self.render, self.observation_mode)
+                _worker_env = game.PacmanEnvironment(self.render, self.obs_mode)
             results = [evaluate_genome(args) for args in args_list]
 
         # Update genome fitness based on results
@@ -228,7 +228,7 @@ class Trainer:
         """ Starts the NEAT training process. """
         print(f"\n--- Starting NEAT Training ---")
         print(f"Config File: {CONFIG_PATH}")
-        print(f"Observation Mode: {self.observation_mode}")
+        print(f"Observation Mode: {self.obs_mode}")
         print(f"Max Generations: {self.gen}")
         print(f"Cores for Evaluation: {self.cores}")
         print(f"Starting from Generation: {self.population.generation}")
@@ -243,13 +243,13 @@ class Trainer:
             print(f"Best genome found: {winner}")
 
             # Save the winning genome
-            winner_path = os.path.join(CHECKPOINT_DIR, f'winner-{self.observation_mode}.pkl')
+            winner_path = os.path.join(CHECKPOINT_DIR, f'winner-{self.obs_mode}.pkl')
             with open(winner_path, 'wb') as f:
                 pickle.dump(winner, f)
             print(f"Winner genome saved to {winner_path}")
 
             # save the entire final population state
-            final_pop_path = os.path.join(CHECKPOINT_DIR, f'final_population-{self.observation_mode}.pkl')
+            final_pop_path = os.path.join(CHECKPOINT_DIR, f'final_population-{self.obs_mode}.pkl')
             with open(final_pop_path, 'wb') as f:
                 pickle.dump(self.population, f)
             print(f"Final population saved to {final_pop_path}")
@@ -267,16 +267,16 @@ class Trainer:
                 self.pool.join()
                 print("Pool closed.")
 
-def run(restore_checkpoint,  observation_mode,config_file, generations, render, cores):
+def run(checkpoint,  obs_mode,config_file, generations, render, cores):
 
     # Create Trainer instance with the observation mode
     trainer = Trainer(
         neat_config_file=config_file,
         gen=generations,
         cores=cores,
-        resume_from=restore_checkpoint,
+        resume_from=checkpoint,
         render=render,
-        observation_mode=observation_mode
+        obs_mode=obs_mode
     )
 
     trainer.run_training()

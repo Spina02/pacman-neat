@@ -24,7 +24,7 @@ class PacmanEnvironment:
     returning observations and rewards, etc.
     """
 
-    def __init__(self, render : bool, observation_mode : str = 'minimap'):
+    def __init__(self, render : bool, obs_mode : str = 'minimap'):
         
         #? -------------------------- Game state parameters --------------------------
         self.game_state         : GameState             = None          # GameState object
@@ -46,7 +46,7 @@ class PacmanEnvironment:
         self.max_reached        : bool                  = False         # Whether the max steps have been reached
         
         #? -------------------------- Observation variables --------------------------
-        self.observation_mode   : str                   = observation_mode
+        self.obs_mode   : str                   = obs_mode
         self.wall_distance_map  : np.ndarray            = None          # Pre-computed wall distances
         self.wall_code          : int                   = None          # Will be set in reset()
         self.dot_code           : int                   = None          # "dot"  tile code
@@ -169,7 +169,7 @@ class PacmanEnvironment:
         }
         
         # Get initial observation based on the configured mode
-        return self.get_observation(mode=self.observation_mode)
+        return self.get_observation(mode=self.obs_mode)
 
     #?--------------------------------------------------------------
     #?                        Step function
@@ -220,7 +220,7 @@ class PacmanEnvironment:
         self._refresh_item_positions()
 
         # Get the current observation
-        obs = self.get_observation(mode=self.observation_mode)
+        obs = self.get_observation(mode=self.obs_mode)
 
         # Using cached arrays we can compute remaining dots quickly
         prev_remaining_dots = self.remaining_dots
@@ -345,7 +345,6 @@ class PacmanEnvironment:
         Returns:
             if mode == "simple":
                 numpy.ndarray: Observation vector (total 26 elements) containing:
-                    - Pacman's normalized grid position (row, col) [2 elements]
                     - Relative normalized positions of up to 4 ghosts (fixed order: 'blinky', 'pinky', 'inky', 'clyde') [8 elements]
                     - Ghost scared bits (1.0 if scared, 0.0 otherwise) [4 elements]
                     - Vector (normalized) from Pacman to the nearest dot [2 elements]
@@ -355,7 +354,9 @@ class PacmanEnvironment:
                     - Pacman's power-up state (1.0 if active, 0.0 otherwise) [1 element]
                     - One-hot encoding of last action [4 elements]
             if mode == "minimap":
-                numpy.ndarray: Observation vector (total 26 elements + 64 minimap elements = 90 elements)
+                numpy.ndarray: Observation vector (total 26 elements + 64 minimap elements = 90 elements) containing:
+                    - All elements from "simple" mode [26 elements]
+                    - Minimap representation of the game state [64 elements]
         """
         # Use local variables for frequently accessed attributes
         game_state = self.game_state
@@ -518,7 +519,7 @@ class PacmanEnvironment:
         Args:
             previous_points (int): Score before the current step.
             current_observation (np.array or None): The observation vector
-                from simple mode IF self.observation_mode is 'simple'. Otherwise None.
+                from simple mode IF self.obs_mode is 'simple'. Otherwise None.
                 Used for features like wall distance if needed.
         """
         reward = 0.0
@@ -781,7 +782,7 @@ if __name__ == "__main__":
     import pygame
 
     print("Testing Minimap Observation Mode...")
-    env_minimap = PacmanEnvironment(render=True, observation_mode='minimap')
+    env_minimap = PacmanEnvironment(render=True, obs_mode='minimap')
     env_minimap.current_gen = 9999
     obs_minimap = env_minimap.reset()
     print(f"Initial Minimap Observation Shape: {obs_minimap.shape}")
@@ -836,7 +837,7 @@ if __name__ == "__main__":
                 
             elif env.debug == 2:
                 print(f"Action: {action}, Reward: {reward:.3f}, Total Reward: {total_reward:.3f}, Done: {done}")
-                if env.observation_mode == 'minimap':
+                if env.obs_mode == 'minimap':
                     print("Minimap Observation:\n", obs[26:90].reshape(8, 8))
                 else:
                     print("Simple Observation:", obs)
@@ -844,7 +845,7 @@ if __name__ == "__main__":
         # Limit frame rate
         clock.tick(60) # Aim for 60 FPS
 
-    print(f"Game Over ({env.observation_mode} mode), total reward:", total_reward)
+    print(f"Game Over ({env.obs_mode} mode), total reward:", total_reward)
     print(f"Final Score: {env.game_state.points}")
 
     env.close()

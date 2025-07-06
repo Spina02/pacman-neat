@@ -78,11 +78,11 @@ This entire logic is managed within `game/game_env.py`, switching between a simp
 
 ---
 
-### Code Execution
+## Code Execution
 
 This project is executed via the command line through the `main.py` script, which acts as the main entry point for both training a new model and running a pre-existing one.
 
-#### How to train
+### How to train
 
 The `train` mode initiates the NEAT evolutionary process. It creates, evaluates, and evolves a population of neural networks over a specified number of generations.
 
@@ -104,7 +104,7 @@ python main.py train [OPTIONS]
 | `--cores` | int | `15` | Sets the number of CPU cores to use for parallel evaluation of genomes. Higher values accelerate training. |
 | `--reset` | bool | `False` | If `True`, it will delete all existing checkpoints and best genomes for the current `obs_mode` before starting a new training session from scratch. |
 
-#### How to run
+### How to run
 
 The `run` mode allows for the visualization of the performance of a single, previously saved genome.
 

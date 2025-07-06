@@ -1,13 +1,11 @@
-# --- START OF FILE run.py ---
-
 import os
 import neat
 import sys
 import pickle
 import pygame
 import time
-import argparse
 import numpy as np
+import random
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
@@ -25,6 +23,10 @@ except ModuleNotFoundError:
 DEFAULT_CONFIG_PATH = os.path.join(project_root, 'config')
 DEFAULT_CHECKPOINT_DIR = os.path.join(project_root, 'checkpoints')
 DEFAULT_BEST_GENOME_DIR = os.path.join(DEFAULT_CHECKPOINT_DIR, 'best_genomes')
+
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
 
 class RunGenome:
     def __init__(self, config_path, genome_to_load, observation_mode='minimap', is_best_overall=False, debug=0):
@@ -134,8 +136,7 @@ class RunGenome:
             done = False
             total_reward = 0
             step_count = 0
-
-            #if self.debug >= 3: print("[Step, Action, Reward, CumulativeReward]")
+            
             running = True
             while running and not done and step_count < run_max_steps:
                 for event in pygame.event.get():
@@ -150,19 +151,15 @@ class RunGenome:
                 outputs = self.network.activate(obs_array)
                 action = np.argmax(outputs)
 
-                obs, reward, done, info = self.env.step(action)
+                obs, reward, done = self.env.step(action)
 
                 total_reward += reward
 
-                # if self.debug >= 3:
-                #      print(f"[{step_count}, {action}, {reward:.3f}, {total_reward:.3f}]")
-
                 step_count += 1
 
-                # Riduci il time.sleep per una visualizzazione più fluida
                 time.sleep(1 / 120) # 120 FPS target
 
-            EXP_BONUS = 4 # Riconferma il valore
+            EXP_BONUS = 4
             exploration_reward = self.env.tot_visited * EXP_BONUS
             total_reward += exploration_reward
 
@@ -253,32 +250,3 @@ def run(config_file, checkpoint_file, observation_mode, best, max_steps=None, de
         if pygame.get_init():
             pygame.quit()
         print("Pygame quit and resources released.")
-
-
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description="Run a Pacman genome from NEAT.")
-    parser.add_argument("--load_file", type=str, default=None,
-                        help="Optional: Path to the NEAT checkpoint file OR a specific .pkl genome file.")
-    parser.add_argument("--best", action='store_true',
-                        help="Load the best genome found overall (looks for 'best_MODE_latest.pkl'). Overrides load_file if found.")
-    parser.add_argument("--config", type=str,
-                        default=DEFAULT_CONFIG_PATH,
-                        help="Path to the NEAT config file.")
-    parser.add_argument('--observation_mode', type=str, default='minimap',
-                         choices=['simple', 'minimap'], help='Observation mode used during training.')
-    parser.add_argument('--max_steps', type=int, default=None,
-                         help="Override the maximum steps for the run (default: use environment's MAX_EPISODE_STEPS).")
-    parser.add_argument('--debug', type=int, default=0,
-                        help="Debug level for verbose output (0-3).")
-
-    args = parser.parse_args()
-
-    run(
-        config_file=args.config,
-        checkpoint_file=args.load_file,
-        observation_mode=args.observation_mode,
-        best=args.best,
-        max_steps=args.max_steps,
-        debug=args.debug
-    )

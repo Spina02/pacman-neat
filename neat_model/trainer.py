@@ -6,7 +6,6 @@ import numpy as np
 import pickle
 import signal
 import sys
-import atexit
 import pygame
 import gc
 from .neat_utils import BestGenomeSaver
@@ -29,8 +28,6 @@ def init_worker(render_mode, obs_mode):
     Creates a single environment instance for this process.
     """
     global _worker_env
-    # print(f"Initializing worker process {os.getpid()}...")
-    # We import game_env INSIDE the worker to avoid issues with 'spawn'
     from game import game_env as game
     _worker_env = game.PacmanEnvironment(render=render_mode, observation_mode=obs_mode)
     _worker_env._is_worker = True # Flag to handle pygame shutdown
@@ -111,7 +108,7 @@ def evaluate_genome(args):
         while not done:
             outputs = net.activate(state)
             action = np.argmax(outputs)
-            state, reward, done, _ = env.step(action)
+            state, reward, done = env.step(action)
             total_reward += reward
         EXP_BONUS = 4
         reward = env.tot_visited * EXP_BONUS
@@ -251,11 +248,11 @@ class Trainer:
                 pickle.dump(winner, f)
             print(f"Winner genome saved to {winner_path}")
 
-            # You might also want to save the entire final population state
+            # save the entire final population state
             final_pop_path = os.path.join(CHECKPOINT_DIR, f'final_population-{self.observation_mode}.pkl')
-            # Note: Saving the whole population object might be large
-            # Consider saving just stats or key genomes if needed
-            # For now, we'll just save the explicit winner
+            with open(final_pop_path, 'wb') as f:
+                pickle.dump(self.population, f)
+            print(f"Final population saved to {final_pop_path}")
 
         except Exception as e:
             print(f"\n--- ERROR DURING TRAINING ---")
@@ -282,66 +279,4 @@ def run(restore_checkpoint,  observation_mode,config_file, generations, render, 
         observation_mode=observation_mode
     )
 
-    trainer.run_training()
-
-# This block is for direct execution testing
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description='NEAT Pacman Trainer (Direct Execution Test)')
-    parser.add_argument('--config', type=str, default=CONFIG_PATH, help='NEAT configuration file')
-    parser.add_argument('--generations', type=int, default=50, help='Number of generations to run')
-    parser.add_argument('--checkpoint_dir', type=str, default=CHECKPOINT_DIR, help='Directory for checkpoints')
-    parser.add_argument('--restore_checkpoint', type=str, default=None, help='Specific checkpoint file to restore from')
-    parser.add_argument('--observation_mode', type=str, default='simple', choices=['simple', 'minimap'], help='Observation mode')
-    parser.add_argument('--cores', type=int, default=max(1, mp.cpu_count() - 1), help='Number of cores for evaluation')
-    parser.add_argument('--reset', action='store_true', help='Delete existing checkpoints for the selected mode before starting')
-
-
-    args = parser.parse_args()
-
-    # Ensure checkpoint directory exists
-    if not os.path.exists(args.checkpoint_dir):
-        os.makedirs(args.checkpoint_dir)
-
-    # Handle reset flag
-    if args.reset:
-        print(f"Resetting checkpoints for mode '{args.observation_mode}' in {args.checkpoint_dir}...")
-        prefix_to_delete = f'checkpoint-{args.observation_mode}-'
-        files_deleted = 0
-        for f in os.listdir(args.checkpoint_dir):
-            if f.startswith(prefix_to_delete):
-                try:
-                    os.remove(os.path.join(args.checkpoint_dir, f))
-                    files_deleted += 1
-                except OSError as e:
-                    print(f"Error deleting file {f}: {e}")
-        print(f"Deleted {files_deleted} checkpoint files.")
-        args.restore_checkpoint = None # Ensure we don't try to restore after reset
-
-
-    # Find the latest checkpoint if not specified
-    if args.restore_checkpoint is None:
-        checkpoint_prefix = f'checkpoint-{args.observation_mode}-'
-        checkpoints = sorted(
-            [f for f in os.listdir(args.checkpoint_dir) if f.startswith(checkpoint_prefix)],
-            key=lambda x: int(x.split('-')[-1]) # Sort by generation number
-        )
-        print(f"Checkpoints: {checkpoints}")
-        if checkpoints:
-            args.restore_checkpoint = os.path.join(args.checkpoint_dir, checkpoints[-1])
-            print(f"Found latest checkpoint for mode '{args.observation_mode}': {args.restore_checkpoint}")
-        else:
-            print(f"No checkpoints found for mode '{args.observation_mode}'. Starting new training.")
-
-
-    # Create and run the trainer
-    trainer = Trainer(
-        neat_config_file=args.config,
-        gen=args.generations,
-        cores=args.cores,
-        resume_from=args.restore_checkpoint,
-        render=False, # Training is usually headless
-        observation_mode=args.observation_mode
-    )
     trainer.run_training()

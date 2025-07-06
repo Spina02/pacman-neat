@@ -3,13 +3,20 @@ import os
 import pickle
 
 class BestGenomeSaver(neat.reporting.BaseReporter):
+    """
+    This class is a custom NEAT reporter that automatically saves the best genome found so far during training. 
+    It extends neat.reporting.BaseReporter, which allows it to hook into the NEAT evolutionary process and respond 
+    to events such as the end of a generation. 
+    
+    #! Only the relevant methods are implemented.
+    """
     def __init__(self, save_path, filename_prefix='best_genome', generation=0):
         self.save_path = save_path
         self.filename_prefix = filename_prefix
         self.best_fitness_so_far = -float('inf')
         self.current_best_genome = None
         self.current_generation = generation
-        # Assicurati che la directory esista
+        # Ensure the directory exists
         os.makedirs(self.save_path, exist_ok=True)
 
     def start_generation(self, generation):
@@ -17,8 +24,8 @@ class BestGenomeSaver(neat.reporting.BaseReporter):
 
     def post_evaluate(self, config, population, species, best_genome):
         """
-        Chiamato dopo la valutazione di una generazione.
-        Salva il miglior genoma se migliora il massimo storico.
+        Called after the evaluation of a generation.
+        Saves the best genome if it improves the historical maximum.
         """
         if best_genome is None:
              print("Warning: best_genome is None in post_evaluate.")
@@ -49,16 +56,6 @@ class BestGenomeSaver(neat.reporting.BaseReporter):
                 print(f"ERROR saving best genome: {e}")
             print("-" * 30)
 
-    def end_generation(self, config, population, species_set):
-        pass
-    def found_solution(self, config, generation, best):
-        pass # Gestito in post_evaluate
-    def species_stagnant(self, sid, species):
-        pass
-    def info(self, msg):
-        pass
-    def complete_extinction(self):
-        pass
     def finish_reporting(self):
          if self.current_best_genome:
              latest_filename = os.path.join(self.save_path, f"{self.filename_prefix}_latest.pkl")
@@ -69,3 +66,16 @@ class BestGenomeSaver(neat.reporting.BaseReporter):
                       print(f"Final best genome saved to {latest_filename}")
                   except Exception as e:
                        print(f"ERROR saving final best genome: {e}")
+                       
+                       
+    #? -------------------------- Unused methods --------------------------
+    def end_generation(self, config, population, species_set):
+        pass
+    def found_solution(self, config, generation, best):
+        pass # Handled in post_evaluate
+    def species_stagnant(self, sid, species):
+        pass
+    def info(self, msg):
+        pass
+    def complete_extinction(self):
+        pass

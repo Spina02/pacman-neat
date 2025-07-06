@@ -24,48 +24,52 @@ class PacmanEnvironment:
     returning observations and rewards, etc.
     """
 
-    def __init__(self, render, observation_mode='minimap'):
-        self.last_action = None
-        self.game_state = None
-        self.screen = None
-        self.event_handler = None
-        self.all_sprites = None
-        self.screen_manager = None
-        self.prev_points = 0
-        self.stuck_counter = 0
-        # self.prev_dist_to_closest_dot = float('inf')
-        self.render_enabled = render
-        self.observation_mode = observation_mode
-        self.px = 0 # Pacman grid column index
-        self.py = 0 # Pacman grid row index
-        self.visits = None
-        self.neg_count = 0
-        self.current_gen = 0
-        self.steps_since_last_dot = 0
-        self.last_action = None
-        self.eaten_ghosts = 0
-        self.n_opposite = 0
-        self.pacman_pos = None
-        self.tot_visited = 0
-        self.debug = 0
-        self.max_reached = False
-        self.ghost_order = ['blinky', 'pinky', 'inky', 'clyde']
-        self.EASY_GEN = [0, 500, 750, 1000] # Generations at which each ghost is added
-        self.MAX_EPISODE_STEPS = 5000 # Default max steps per episode
-        self.wall_distance_map = None # Pre-computed wall distances
-        self.wall_code = None  # Will be set in reset()
-        self.dot_code = None  # "dot"  tile code
-        self.power_code = None  # "power" tile code
-        # --------------------------------------------------------------
-        # Cached dynamic item positions (initialised in reset())
-        # --------------------------------------------------------------
-        self.dot_positions = None   # np.ndarray of dot coordinates (rows, cols)
-        self.power_positions = None # np.ndarray of power-up coordinates
-
+    def __init__(self, render : bool, observation_mode : str = 'minimap'):
+        
+        #? -------------------------- Game state parameters --------------------------
+        self.game_state         : GameState             = None          # GameState object
+        self.screen             : pygame.Surface        = None          # Pygame surface
+        self.event_handler      : EventHandler          = None          # EventHandler object
+        self.all_sprites        : pygame.sprite.Group   = None          # Pygame sprite group
+        self.screen_manager     : ScreenManager         = None          # ScreenManager object
+        self.render_enabled     : bool                  = render        # Whether to render the game
+        self.debug              : int                   = 0             # Debug level
+        self.MAX_EPISODE_STEPS  : int                   = 5000          # Default max steps per episode
+        
+        #? -------------------------- Game state variables --------------------------
+        self.ghost_order        : list[str]             = ['blinky', 'pinky', 'inky', 'clyde'] # Ghost order
+        self.px                 : int                   = 0             # Pacman's x-coordinate in grid
+        self.py                 : int                   = 0             # Pacman's y-coordinate in grid
+        self.visits             : np.ndarray            = None          # Array of visits to each cell
+        self.last_action        : int                   = None          # Last action taken
+        self.pacman_pos         : np.ndarray            = None          # Pacman's position in grid
+        self.max_reached        : bool                  = False         # Whether the max steps have been reached
+        
+        #? -------------------------- Observation variables --------------------------
+        self.observation_mode   : str                   = observation_mode
+        self.wall_distance_map  : np.ndarray            = None          # Pre-computed wall distances
+        self.wall_code          : int                   = None          # Will be set in reset()
+        self.dot_code           : int                   = None          # "dot"  tile code
+        self.power_code         : int                   = None          # "power" tile code
+        self.dot_positions      : np.ndarray            = None          # np.ndarray of dot coordinates (rows, cols)
+        self.power_positions    : np.ndarray            = None          # np.ndarray of power-up coordinates
+        
         # Pre-compute reciprocals of grid dimensions to replace repeated division
-        self._inv_num_rows = 1.0 / NUM_ROWS
-        self._inv_num_cols = 1.0 / NUM_COLS
-        self.progress_checkpoints = {}
+        self._inv_num_rows      : float                 = 1.0 / NUM_ROWS
+        self._inv_num_cols      : float                 = 1.0 / NUM_COLS
+        
+        #? -------------------------- Reward variables --------------------------
+        self.n_opposite         : int                   = 0             # Number of opposite moves
+        self.stuck_counter      : int                   = 0             # Number of consecutive moves in the same direction
+        self.no_dot_steps       : int                   = 0             # Number of steps since last dot
+        self.prev_points        : int                   = 0             # Previous points
+        self.tot_visited        : int                   = 0             # Total number of visited cells
+        
+        #? -------------------------- Curriculum learning --------------------------
+        self.current_gen        : int = 0                               # This will be set in run() or train()
+        self.current_level      : int = 1                               # This will be set in reset()
+        self.EASY_GEN           : list[int] = [1000, 1000, 1000, 1000]  # Generations at which each ghost is added
+        self.progress           : dict[float, bool] = {}                # Progress checkpoints for curriculum learning
 
     #?--------------------------------------------------------------
     #?                    Initialization functions
@@ -91,28 +95,31 @@ class PacmanEnvironment:
         else:
             self.screen = pygame.Surface((1024, 768)) # Create a surface for drawing if needed
             
-        self.game_state = GameState()
+        #? Curriculum learning:
+        # 1) Start with level 1 (only dots, ghosts only in chase mode [gen >= 500])
+        # 2) After 1500 generations, switch to level 2 (same as level 1 but ghosts have scatter and chase mode)
+        # 3) After 2000 generations, switch to level 3 (dots, powerups, ghosts)
+        prev_level = getattr(self, "current_level", None)
+        if self.current_gen >= 2000:
+            level = 3
+        elif self.current_gen >= 1500:
+            level = 2
+        else:
+            level = 1
+        if prev_level != level:
+            print(f"[Curriculum] \t Switching to level {level}")
+        self.current_level = level
+        
+        #? Game state initialization
+        self.game_state = GameState(level)
         self.game_state.sound_enabled = False
-        # # If rendering is enabled but screen wasn't created (after headless), create it
-        # if self.render_enabled and self.screen is None:
-        #      self.screen = pygame.display.set_mode((1024, 768))
-        # # If not rendering and screen exists (from previous render run), make it a surface
-        # elif not self.render_enabled and self.screen is not None and not isinstance(self.screen, pygame.Surface):
-        #      self.screen = pygame.Surface((1024, 768))
-        # # Ensure screen is a valid surface if not rendering
-        # elif not self.render_enabled and self.screen is None:
-        #      self.screen = pygame.Surface((1024, 768))
-
         self.event_handler = EventHandler(self.screen, self.game_state)
         self.all_sprites = pygame.sprite.Group()
 
         self.prev_points = 0
-        self.neg_count = 0
-        # self.prev_dist_to_closest_dot = float('inf')
         self.stuck_counter = 0
-        self.steps_since_last_dot = 0
+        self.no_dot_steps = 0
         self.last_action = None
-        self.eaten_ghosts = 0
         self.n_opposite = 0
         self.tot_visited = 0
 
@@ -128,9 +135,7 @@ class PacmanEnvironment:
         rows, cols = self.game_state.level_matrix_np.shape
         self.visits = np.zeros((rows, cols), dtype=int)
         
-        # --------------------------------------------------------------
-        # Cache tile codes once per reset (micro-optimisation)
-        # --------------------------------------------------------------
+        # Cache tile codes
         self.wall_code  = self.game_state.tile_encoding.get("wall", 0)
         self.dot_code   = self.game_state.tile_encoding.get("dot", 1)
         self.power_code = self.game_state.tile_encoding.get("power", 2)
@@ -143,7 +148,7 @@ class PacmanEnvironment:
         self.dot_positions   = np.argwhere(grid == self.dot_code)
         self.power_positions = np.argwhere(grid == self.power_code)
         
-        if self.current_gen < self.EASY_GEN[0]:
+        if self.current_gen < min(self.EASY_GEN):
             self.MAX_EPISODE_STEPS = 2000
             
         for i in range(len(self.ghost_order)):
@@ -151,21 +156,12 @@ class PacmanEnvironment:
                 self.game_state.no_ghosts[self.ghost_order[i]] = True
             else:
                 self.game_state.no_ghosts[self.ghost_order[i]] = False
-                
-        #START_MAX_STEPS = 2000
-        #FINAL_MAX_STEPS = 4000
-        #GENS_TO_REACH_FINAL = 300 # Reach final limit after 200 generations
-        #
-        #if self.current_gen < GENS_TO_REACH_FINAL:
-        #    self.MAX_EPISODE_STEPS = int(START_MAX_STEPS + (FINAL_MAX_STEPS - START_MAX_STEPS) * (self.current_gen / GENS_TO_REACH_FINAL))
-        #else:
-        #    self.MAX_EPISODE_STEPS = FINAL_MAX_STEPS
         
         # Use cached dot positions for efficiency
         self.total_dots = len(self.dot_positions)
         self.remaining_dots = self.total_dots
         
-        self.progress_checkpoints = {
+        self.progress = {
             0.9: False,
             0.75: False,
             0.5: False,
@@ -173,15 +169,13 @@ class PacmanEnvironment:
         }
         
         # Get initial observation based on the configured mode
-        obs = self.get_observation(mode=self.observation_mode)
-
-        return obs
+        return self.get_observation(mode=self.observation_mode)
 
     #?--------------------------------------------------------------
     #?                        Step function
     #?--------------------------------------------------------------
 
-    def step(self, action):
+    def step(self, action : int):
         """
         Advance one frame with the specified action.
         Args:
@@ -190,7 +184,6 @@ class PacmanEnvironment:
             observation (list or np.array)
             reward (float)
             done (bool)
-            info (dict)
         """
         current_points = self.game_state.points
         
@@ -206,12 +199,6 @@ class PacmanEnvironment:
         else:
             print("Invalid action:", action)
 
-        # 2) Update one frame
-        reward = 0.0
-        done = False
-        # Use cached dot code
-        dot_code = self.dot_code
-
         #? replication of "GameRun.main()" loop but only for 1 iteration
         # Handle Pygame events (important even in headless for QUIT signals etc.)
         for event in pygame.event.get():
@@ -222,15 +209,14 @@ class PacmanEnvironment:
         self.event_handler.check_frame_events()
 
         # Update game logic (sprite movements, collisions)
-        dt = 1
-        self.all_sprites.update(dt)
+        self.all_sprites.update(1)
+        
+        self.prev_px, self.prev_py = self.px, self.py
         
         # Update Pacman's grid position AFTER movement
         self._update_pacman_grid_position()
 
-        # --------------------------------------------------------------
         # Refresh cached dot / power-up coordinates after state update
-        # --------------------------------------------------------------
         self._refresh_item_positions()
 
         # Get the current observation
@@ -239,16 +225,15 @@ class PacmanEnvironment:
         # Using cached arrays we can compute remaining dots quickly
         prev_remaining_dots = self.remaining_dots
         self.remaining_dots = len(self.dot_positions)
-        dots_eaten_this_step = prev_remaining_dots - self.remaining_dots
         
         # Determine if done
         done = self.game_state.is_pacman_dead or self.game_state.level_complete
         
         # Update steps since last dot counter
-        if dots_eaten_this_step > 0:
-            self.steps_since_last_dot = 0
+        if prev_remaining_dots - self.remaining_dots > 0:
+            self.no_dot_steps = 0
         else:
-            self.steps_since_last_dot += 1
+            self.no_dot_steps += 1
             
         reward = self.calculate_reward(current_points, obs)
         
@@ -279,9 +264,7 @@ class PacmanEnvironment:
         self.last_action = action
         self.game_state.step_count += 1
 
-        info = {} # Placeholder for additional info if needed later
-        return obs, reward, done, info
-
+        return obs, reward, done
 
     # Helper function to pre-compute wall distances for the entire grid
     def _precompute_wall_distances(self):
@@ -300,31 +283,29 @@ class PacmanEnvironment:
                 if grid[r, c] == wall_code:
                     continue  # Distances are 0 for wall cells
 
-                # dist_left (Equivalent to distance_to_wall(r, c, 0, -1))
+                # dist_left
                 dist = 0
                 for i in range(c - 1, -1, -1):
                     if grid[r, i] == wall_code: break
                     dist += 1
                 self.wall_distance_map[r, c, 0] = dist / cols
 
-                # dist_right (Equivalent to distance_to_wall(r, c + 1, 0, 1))
+                # dist_right
                 dist = 0
-                # Original logic started scan from c + 2
                 for i in range(c + 2, cols):
                     if grid[r, i] == wall_code: break
                     dist += 1
                 self.wall_distance_map[r, c, 1] = dist / cols
 
-                # dist_up (Equivalent to distance_to_wall(r, c, -1, 0))
+                # dist_up
                 dist = 0
                 for i in range(r - 1, -1, -1):
                     if grid[i, c] == wall_code: break
                     dist += 1
                 self.wall_distance_map[r, c, 2] = dist / rows
 
-                # dist_down (Equivalent to distance_to_wall(r + 1, c, 1, 0))
+                # dist_down
                 dist = 0
-                # Original logic started scan from r + 2
                 for i in range(r + 2, rows):
                     if grid[i, c] == wall_code: break
                     dist += 1
@@ -336,11 +317,10 @@ class PacmanEnvironment:
         if self.game_state.pacman_rect and self.game_state.start_pos:
             px_pixel, py_pixel = self.game_state.pacman_rect[:2]
             start_x, start_y = self.game_state.start_pos
-            cell_w, cell_h = CELL_SIZE
             
             # Convert pixel coordinates to grid indices
-            grid_y, grid_x = get_idx_from_coords(px_pixel, py_pixel, start_x, start_y, cell_w)
-            self.py_float, self.px_float = get_float_idx_from_coords(px_pixel, py_pixel, start_x, start_y, cell_w)
+            grid_y, grid_x = get_idx_from_coords(px_pixel, py_pixel, start_x, start_y, CELL_SIZE[0])
+            self.py_float, self.px_float = get_float_idx_from_coords(px_pixel, py_pixel, start_x, start_y, CELL_SIZE[0])
             # Ensure indices are within bounds
             self.py = max(0, min(NUM_ROWS - 1, grid_y))
             self.px = max(0, min(NUM_COLS - 1, grid_x))
@@ -350,12 +330,11 @@ class PacmanEnvironment:
             self.px = 0
             print("Warning: Pacman rect or start pos not available for grid calculation.")
 
-
     #?--------------------------------------------------------------
     #?                    Observation function
     #?--------------------------------------------------------------
 
-    def get_observation(self, mode="minimap"):
+    def get_observation(self, mode : str = "minimap", minimap_size : int = 8):
         """
         Returns an observation representation of the current game state.
 
@@ -365,7 +344,7 @@ class PacmanEnvironment:
 
         Returns:
             if mode == "simple":
-                numpy.ndarray: Observation vector (total 24 elements) containing:
+                numpy.ndarray: Observation vector (total 26 elements) containing:
                     - Pacman's normalized grid position (row, col) [2 elements]
                     - Relative normalized positions of up to 4 ghosts (fixed order: 'blinky', 'pinky', 'inky', 'clyde') [8 elements]
                     - Ghost scared bits (1.0 if scared, 0.0 otherwise) [4 elements]
@@ -374,8 +353,9 @@ class PacmanEnvironment:
                     - Number of remaining dots [1 element]
                     - Normalized distances to walls in 4 directions (left, right, up, down) [4 elements]
                     - Pacman's power-up state (1.0 if active, 0.0 otherwise) [1 element]
+                    - One-hot encoding of last action [4 elements]
             if mode == "minimap":
-                numpy.ndarray: Observation vector (total 24 elements + 64 minimap elements) containing:
+                numpy.ndarray: Observation vector (total 26 elements + 64 minimap elements = 90 elements)
         """
         # Use local variables for frequently accessed attributes
         game_state = self.game_state
@@ -389,7 +369,7 @@ class PacmanEnvironment:
             # Normalize Pacman position
             self.pacman_pos = np.array([pacman_r_float, pacman_c_float])
 
-            # (2) Relative positions of ghosts (GRID BASED)
+            #? (1) Relative positions of ghosts (GRID BASED)
             ghost_rel = -np.ones(8)  # 4 ghosts * 2 coords
             if not all(game_state.no_ghosts.values()):
                 ghosts = game_state.ghosts  # dict: ghost_name -> (gx, gy) in pixels
@@ -402,12 +382,10 @@ class PacmanEnvironment:
                         ghost_rel[i*2 + 1] = rel_c
             # If the ghost doesn't exist or isn't placed, leave (-1,-1)
 
-            # (3) Ghost scared bits
+            #? (2) Ghost scared bits
             ghost_scared_bits = np.array([1.0 if game_state.scared_ghosts[game_state.ghost_encoding[name]] else 0.0 for name in self.ghost_order], dtype=np.float32)
 
-            # (4) Compute the vector to the nearest dot.
-
-            # Use cached dot positions (updated each step)
+            #? (3) Compute the vector to the nearest dot
             dots = self.dot_positions
             if dots.size > 0:
                 # Compute squared distances (cheaper than sqrt) – sqrt not needed for argmin
@@ -420,8 +398,7 @@ class PacmanEnvironment:
             else:
                 closest_dot_vec = np.array([-1, -1])
 
-            # (5) Nearest powerup (if any)
-            # Use cached power-up positions
+            #? (4) Nearest powerup (if any)
             powerups = self.power_positions
             if powerups.size > 0:
                 d_sq = np.sum((powerups - self.pacman_pos) ** 2, axis=1)
@@ -432,17 +409,17 @@ class PacmanEnvironment:
             else:
                 closest_powerup_vec = np.array([-1, -1])
                                 
-            # (6) Remaining dots
+            #? (5) Remaining dots
             remaining_dots = [self.remaining_dots/self.total_dots]
 
-            # (7) Get pre-computed distances to the nearest wall in 4 directions
+            #? (6) Get pre-computed distances to the nearest wall in 4 directions
             r, c = pacman_grid.astype(int)
             wall_dists = self.wall_distance_map[r, c]
 
-            # (8) Pacman powerup status
+            #? (7) Pacman powerup status
             power_state = np.array([game_state.is_pacman_powered])
             
-            # one hot encoding of last action
+            #? (8) One hot encoding of last action
             last_action = np.zeros(4)
             if self.last_action is not None:
                 last_action[self.last_action] = 1.0
@@ -463,19 +440,20 @@ class PacmanEnvironment:
                 return observation
 
         #elif mode == "minimap":
+            #? (9) Minimap
             minimap_size = 8
             radius = minimap_size // 2
 
             # Define encoding for different elements in the minimap
             encoding = {
-                "wall": -1.0,
-                "dot": 0.5,
-                "power": 0.75,
-                "void": 0.0, # Empty space Pacman can move into
-                "elec": -1.0, # Treat electric fence like a wall
-                "ghost_normal": -0.75,
-                "ghost_scared": 1.0,
-                "out_of_bounds": -1.0 # Treat out of bounds like a wall
+                "wall"          : -1.0,     # Walls
+                "elec"          : -1.0,     # Treat electric fence like a wall
+                "out_of_bounds" : -1.0,     # Treat out of bounds like a wall
+                "ghost_normal"  : -0.75,    # Ghosts
+                "void"          : 0.0,      # Empty space Pacman can move into
+                "dot"           : 0.5,      # Dots
+                "power"         : 0.75,     # Power pellets
+                "ghost_scared"  : 1.0,      # Scared ghosts
             }
 
             # Initialize minimap with 'out_of_bounds' value
@@ -520,33 +498,21 @@ class PacmanEnvironment:
                         r_mini = rel_r + radius
                         c_mini = rel_c + radius
 
-                        # Check if the ghost is scared
-                        ghost_idx = ghost_name_to_idx[name]
-                        is_scared = game_state.scared_ghosts[ghost_idx]
-
                         # Set the minimap cell value (ghosts overwrite static elements)
-                        minimap[r_mini, c_mini] = encoding["ghost_scared"] if is_scared else encoding["ghost_normal"]
+                        minimap[r_mini, c_mini] = encoding["ghost_scared"] if game_state.scared_ghosts[ghost_name_to_idx[name]] else encoding["ghost_normal"]
 
-            # # print the matrix for debugging
-            # for row in minimap:
-            #     print(" ".join(f"{val:.2f}\t" for val in row))
-            # print("\n") # Newline for separation
-
-            # Flatten the 2D minimap into a 1D vector for NEAT
-            observation = np.concatenate([observation, minimap.flatten()])
-            #print(f"Minimap Obs Shape: {observation.shape}")
-            
-            return observation
+            # Return the flattened minimap as a 1D vector concatenated with the observation
+            return np.concatenate([observation, minimap.flatten()])
 
         else:
             print(f"Warning: Unknown observation mode '{mode}'. Returning empty array.")
             return np.array([])
 
-    #?--------------------------------------------------------------
-    #?                      Reward function
-    #?--------------------------------------------------------------
+    #?-------------------------------------------------------------------------
+    #?                          Complex Reward function
+    #?-------------------------------------------------------------------------
 
-    def calculate_reward(self, previous_points, current_observation):
+    def _calculate_reward(self, previous_points, current_observation):
         """
         Calculates the reward for the current step.
         Args:
@@ -565,90 +531,57 @@ class PacmanEnvironment:
         
         if self.debug >= 3:
             print(f"Step: {game_state.step_count}, Pacman position: ({self.py}, {self.px}), Action: {current_action_int}")
-
-
-        # --- One-time Checkpoint Bonuses ---
-        eaten_dots = self.total_dots - self.remaining_dots
-        eaten_ratio = eaten_dots / self.total_dots if self.total_dots > 0 else 0
-
-        # Check from highest to lowest to award only one bonus per step
-        if eaten_ratio > 0.9 and not self.progress_checkpoints[0.9]:
-            bonus = 2000.0
-            reward += bonus
-            self.progress_checkpoints[0.9] = True
-            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 90%! +{bonus}")
-            
-        elif eaten_ratio > 0.75 and not self.progress_checkpoints[0.75]:
-            bonus = 750.0
-            reward += bonus
-            self.progress_checkpoints[0.75] = True
-            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 75%! +{bonus}")
-            
-        elif eaten_ratio > 0.5 and not self.progress_checkpoints[0.5]:
-            bonus = 500.0
-            reward += bonus
-            self.progress_checkpoints[0.5] = True
-            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 50%! +{bonus}")
-        elif eaten_ratio > 0.25 and not self.progress_checkpoints[0.25]:
-            bonus = 250.0
-            reward += bonus
-            self.progress_checkpoints[0.25] = True
-            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 25%! +{bonus}")
         
-        # 1. Cost of Living
-        COST_OF_LIVING = -0.1 #?
-        reward += COST_OF_LIVING
-        if self.debug >= 3: print(f"cost of living: {COST_OF_LIVING}")
+        #? -------------------------- Cost of Living --------------------------
+        # COST_OF_LIVING = -0 #?
+        # reward += COST_OF_LIVING
+        # if self.debug >= 3: print(f"cost of living: {COST_OF_LIVING}")
 
-        # 2. Reward for Points Gained
-        # multiplier proportional to eaten_dots/total_dots
-        SCORE_MULTIPLIER = 1 + 8 * (eaten_dots / self.total_dots)
-        points_gain = current_points - previous_points
-        
-        last_reward = reward
-        tmp = ""
-
-        # 3. Specific Event Bonuses
+        #? -------------------------- Reward for Points Gained --------------------------
+        # Dynamically scale rewards for points gained: as more dots are eaten,
+        # the multiplier increases, making each dot or power-up more valuable near the end of the level.
+        SCORE_MULTIPLIER = 1 + 9 * ((self.total_dots - self.remaining_dots) / self.total_dots)
         DOT_EATEN_BONUS = 10.0
         POWER_PELLET_EATEN_BONUS = 20.0
-        GHOST_EATEN_BONUS = 50.0
+        GHOST_EATEN_BONUS = 150.0
+        
+        points_gain = current_points - previous_points
+        last_reward = reward
+        tmp = ""
 
         if points_gain == 10: # Pacman ate a standard dot
             reward += 10 * SCORE_MULTIPLIER
             reward += DOT_EATEN_BONUS
             tmp = "dot"
         elif points_gain == 15: # Pacman ate a power pellet
-            self.eaten_ghosts = 0
-            reward += 75 * SCORE_MULTIPLIER
+            reward += 50 * SCORE_MULTIPLIER
             reward += POWER_PELLET_EATEN_BONUS
             tmp = "power up"
         elif points_gain == 25: # Pacman ate a ghost
-            self.eaten_ghosts += 1
-            reward += 200 * self.eaten_ghosts # * SCORE_MULTIPLIER
             reward += GHOST_EATEN_BONUS
             tmp = "ghost"
         elif points_gain > 0:
             reward += points_gain * SCORE_MULTIPLIER
             tmp = "other"
-        if points_gain > 0 and self.debug >= 3: print(f"Pacman ate a {tmp}, reward: {reward - last_reward}")
+        if self.debug >= 3 and points_gain > 0: print(f"Pacman ate a {tmp}, reward: {reward - last_reward}")
 
-        # 4. Penalty for Death
-        DEATH_PENALTY = -1000.0
+        #? -------------------------- Penalty for Death --------------------------
+        DEATH_PENALTY = -1000
         if game_state.is_pacman_dead:
             reward += DEATH_PENALTY
             if self.debug >= 3: print(f"Pacman died, reward: {DEATH_PENALTY}")
 
-        # 5. Bonus for Level Completion
-        LEVEL_COMPLETE_BONUS = 10000.0 # Large bonus for completing the level
+        #? -------------------------- Bonus for Level Completion --------------------------
+        LEVEL_COMPLETE_BONUS = 10000
         if game_state.level_complete:
             reward += LEVEL_COMPLETE_BONUS
             if self.debug >= 3: print(f"Pacman completed the level, reward: {LEVEL_COMPLETE_BONUS}")
 
-        # 6. Penalty for Getting Stuck Against Wall
+        #? -------------------------- Penalty for Getting Stuck Against Wall --------------------------
         if current_observation is not None:
-            STUCK_PENALTY_FACTOR = -0.2
-            STUCK_PENALTY_CAP = -2 # Limit penalty increase
-            STUCK_LIMIT = 200 # Limit for stuck penalty
+            STUCK_PENALTY_FACTOR = -0.1
+            STUCK_PENALTY_CAP = -0.5 # Limit penalty increase
+            STUCK_LIMIT = 100 # Limit for stuck penalty
             #MIN_STUCK_COUNT_FOR_PENALTY = 4 # Minimum stuck count to start penalty
 
             dir_decode = {"l": 0, "r": 1, "u": 2, "d": 3}
@@ -670,8 +603,8 @@ class PacmanEnvironment:
             else:
                 self.stuck_counter = 0   
                 
-        # 7. Reward/Penalty for Ghost Interaction
-        GHOST_INTERACTION_FACTOR = 1
+        #? -------------------------- Reward/Penalty for Ghost Interaction --------------------------
+        GHOST_INTERACTION_FACTOR = 0.5
         if not all(game_state.no_ghosts.values()):
             gh_reward = 0.0
             # Reuse pre-calculated float coordinates of Pacman
@@ -702,33 +635,33 @@ class PacmanEnvironment:
                         # Reward approaching scared ghosts, penalize approaching normal ghosts
                         sign = 1.0 if is_scared else -1.0
                         # Use squared closeness factor for stronger effect when very close
-                        gh_points = sign * GHOST_INTERACTION_FACTOR * closeness_factor**2
+                        gh_points = sign * GHOST_INTERACTION_FACTOR * closeness_factor
                         gh_reward += gh_points
                         
                         if self.debug >= 3: print(f"Pacman close to ghost {name} ({"scared" if is_scared else "not scared"}), distance: {dist_grid_sq}, reward: {gh_points}")
 
             reward += gh_reward
 
-        # 8. Penalty for Immediate Reversal (Anti-Oscillation)
-        REVERSAL_PENALTY = -0.15
-        MAX_REVERSAL_PENALTY = 3 # Maximum penalty for reversal
-        last_reward = reward
-        if self.last_action is not None and current_action_int is not None:
-            # Check if actions are opposite (l<->r or u<->d)
-            is_opposite = abs(current_action_int - self.last_action) == 1 and current_action_int // 2 == self.last_action // 2
-            # Apply penalty only if no points were gained (didn't just eat something)
-            if is_opposite and points_gain <= 0:
-                self.n_opposite += 1
-                reward += REVERSAL_PENALTY*min(self.n_opposite, MAX_REVERSAL_PENALTY)
-                if self.debug >= 3: print(f"Pacman reversed direction, reward: {reward - last_reward}")
-            else:
-                self.n_opposite = 0
+        #? -------------------------- Penalty for Immediate Reversal (Anti-Oscillation) --------------------------
+        # REVERSAL_PENALTY = -0.15
+        # MAX_REVERSAL_PENALTY = 3 # Maximum penalty for reversal
+        # last_reward = reward
+        # if self.last_action is not None and current_action_int is not None:
+        #     # Check if actions are opposite (l<->r or u<->d)
+        #     is_opposite = abs(current_action_int - self.last_action) == 1 and current_action_int // 2 == self.last_action // 2
+        #     # Apply penalty only if no points were gained (didn't just eat something)
+        #     if is_opposite and points_gain <= 0:
+        #         self.n_opposite += 1
+        #         reward += REVERSAL_PENALTY*min(self.n_opposite, MAX_REVERSAL_PENALTY)
+        #         if self.debug >= 3: print(f"Pacman reversed direction, reward: {reward - last_reward}")
+        #     else:
+        #         self.n_opposite = 0
                 
-        # 9. Exploration / Visit Penalty
-        VISIT_BONUS_FIRST =        0.5 # Bonus for first visit
+        #? -------------------------- Exploration / Visit Penalty --------------------------
+        VISIT_BONUS_FIRST =          1 # Bonus for first visit
         VISIT_PENALTY_THRESHOLD =    4 # Start penalizing later
-        VISIT_PENALTY_FACTOR =   -0.25 # Penalty factor for each visit over threshold
-        VISIT_PENALTY_CAP =         -4 # Cap penalty to avoid excessive negative rewards
+        VISIT_PENALTY_FACTOR =    -0.1 # Penalty factor for each visit over threshold
+        VISIT_PENALTY_CAP =         -1 # Cap penalty to avoid excessive negative rewards
 
         rows, cols = self.visits.shape
         current_row, current_col = int(self.py), int(self.px)
@@ -745,21 +678,68 @@ class PacmanEnvironment:
                 reward += max(VISIT_PENALTY_CAP, visit_penalty)
             if self.debug >= 3: print(f"Pacman visited {[current_row, current_col]} (count = {visit_count}), reward: {reward - last_reward}")
                  
-        # 10. Penalty for not eating dots
+        #? -------------------------- Penalty for not eating dots --------------------------
         NO_DOT_PENALTY_START_STEP =  100 # Start penalizing after 50 steps without eating
         NO_DOT_PENALTY_FACTOR =    -0.05 # Penalty per step after threshold
         NO_DOT_PENALTY_CAP =          -1 # Maximum penalty per step for this
 
         last_reward = reward
-        if self.steps_since_last_dot > NO_DOT_PENALTY_START_STEP:
-            no_dot_penalty = NO_DOT_PENALTY_FACTOR * (self.steps_since_last_dot - NO_DOT_PENALTY_START_STEP)
+        if self.no_dot_steps > NO_DOT_PENALTY_START_STEP:
+            no_dot_penalty = NO_DOT_PENALTY_FACTOR * (self.no_dot_steps - NO_DOT_PENALTY_START_STEP)
             reward += max(NO_DOT_PENALTY_CAP, no_dot_penalty)
-            if self.debug >= 3: print(f"Pacman hasn't eaten a dot in {self.steps_since_last_dot} steps, reward: {reward - last_reward}")
+            if self.debug >= 3: print(f"Pacman hasn't eaten a dot in {self.no_dot_steps} steps, reward: {reward - last_reward}")
       
         if self.debug >= 3: print(f"Total reward: {reward:.3f}\n")
         
+        #? -------------------------- One-time Checkpoint Bonuses --------------------------
+        # This is added to the reward function below to avoid code repetition
+        
         return reward
+    
+    #?--------------------------------------------------------------------------------------
+    #?                      Reward only based on survival time (steps)
+    #?--------------------------------------------------------------------------------------
+    def calculate_reward(self, previous_points, current_observation):
+        """
+        This is the reward function used in the first training phase.
+        It is a simple reward function that only rewards Pacman for surviving and eating dots.
+        It is used to train the agent to learn the basic mechanics of the game.
+        """
+        if self.current_gen > 2000:
+            reward = self._calculate_reward(previous_points, current_observation)
+        else:
+            reward = self.game_state.points - previous_points 
+            reward -= 0.1 # cost of living
+        
+        eaten_dots = self.total_dots - self.remaining_dots
+        eaten_ratio = eaten_dots / self.total_dots if self.total_dots > 0 else 0
 
+        #? -------------------------- One-time Checkpoint Bonuses --------------------------
+        bonus = 250
+        if eaten_ratio > 0.9 and not self.progress[0.9]:
+            reward += 2*bonus
+            self.progress[0.9] = True
+            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 90%! +{2*bonus}")
+            
+        elif eaten_ratio > 0.75 and not self.progress[0.75]:
+            reward += bonus
+            self.progress[0.75] = True
+            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 75%! +{bonus}")
+            
+        elif eaten_ratio > 0.5 and not self.progress[0.5]:
+            reward += bonus
+            self.progress[0.5] = True
+            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 50%! +{bonus}")
+        elif eaten_ratio > 0.25 and not self.progress[0.25]:
+            reward += bonus
+            self.progress[0.25] = True
+            if self.debug >= 2: print(f"CHECKPOINT BONUS: Reached 25%! +{bonus}")
+        
+        return reward
+    
+    #?--------------------------------------------------------------
+    #?                      Close the environment
+    #?--------------------------------------------------------------
 
     def close(self):
         """Clean up resources properly"""
@@ -789,30 +769,22 @@ class PacmanEnvironment:
         if self.power_positions is not None and self.power_positions.size > 0:
             mask = grid[self.power_positions[:, 0], self.power_positions[:, 1]] == self.power_code
             self.power_positions = self.power_positions[mask]
+            
+            
+            
+            
+#!-----------------------------------------------------------------------------
+#!                              Interactive testing
+#!-----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import pygame
 
-    # --- Test with Minimap ---
     print("Testing Minimap Observation Mode...")
     env_minimap = PacmanEnvironment(render=True, observation_mode='minimap')
     env_minimap.current_gen = 9999
     obs_minimap = env_minimap.reset()
     print(f"Initial Minimap Observation Shape: {obs_minimap.shape}")
-    # print("Initial Minimap Observation:\n", obs_minimap.reshape(8, 8)) # Print reshaped for readability
-    done_minimap = False
-    total_reward_minimap = 0.0
-    last_action_minimap = None
-
-    # --- Test with Simple ---
-    # print("\nTesting Simple Observation Mode...")
-    # env_simple = PacmanEnvironment(render=True, observation_mode='simple')
-    # obs_simple = env_simple.reset()
-    # print(f"Initial Simple Observation Shape: {obs_simple.shape}")
-    # env_simple.current_gen = 9999
-    # done_simple = False
-    # total_reward_simple = 0.0
-    # last_action_simple = None
 
     key_mappings = {
         pygame.K_LEFT: 0,
@@ -822,12 +794,11 @@ if __name__ == "__main__":
     }
 
     # Choose which environment to run interactively
-    env = env_minimap # Change to env_simple to test simple mode
+    env = env_minimap
     env.debug = 1
-    env.MAX_EPISODE_STEPS = 99999 # Set a max step limit for the interactive run
-    total_reward = total_reward_minimap
-    last_action = last_action_minimap
-    done = done_minimap
+    total_reward = 0
+    last_action = None
+    done = False
     
     # env.game_state.no_ghosts = [True, False, False, False] # Uncomment to test with only one ghost
 
@@ -845,7 +816,7 @@ if __name__ == "__main__":
                     action = mapped
 
         if action is not None and not done:
-            obs, reward, step_done, info = env.step(action)
+            obs, reward, step_done = env.step(action)
             total_reward += reward
             last_action = action
             done = step_done

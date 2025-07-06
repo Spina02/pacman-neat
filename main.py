@@ -40,13 +40,12 @@ def main():
                             print(f"Error deleting file {f}: {e}")
                             
                 if "best_genomes" in os.listdir(args.checkpoint_dir):
-                    for f in os.listdir(args.checkpoint_dir):
-                        if f.startswith("best_genomes"):
-                            try:
-                                os.remove(os.path.join(args.checkpoint_dir, f))
-                                files_deleted += 1
-                            except OSError as e:
-                                print(f"Error deleting file {f}: {e}")
+                    for f in os.listdir(args.checkpoint_dir + "/best_genomes"):
+                        try:   
+                            os.remove(os.path.join(args.checkpoint_dir + "/best_genomes", f))
+                            files_deleted += 1
+                        except OSError as e:
+                            print(f"Error deleting file {f}: {e}")
                 print(f"Deleted {files_deleted} checkpoint files.")
                 args.restore_checkpoint = None # Ensure we don't try to restore after reset
 

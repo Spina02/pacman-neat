@@ -6,7 +6,7 @@ The project leverages a **Curriculum Learning** approach to guide the agent's le
 <details>
 <summary><h2>Repository Structure</h2></summary>
 
-The core Pac-Man game logic is adapted from the [PyPacman](https://github.com/AnandSrikumar/PyPacman.git) repository. I modified it significantly, including bug fixes and refactoring the game state management to create a stable and efficient environment suitable for machine learning applications.
+The core Pac-Man game logic is adapted from the [PyPacman](https://github.com/AnandSrikumar/PyPacman.git) repository (here my [fork](https://github.com/Spina02/PyPacman.git)). I modified it significantly, including bug fixes and refactoring the game state management to create a stable and efficient environment suitable for machine learning applications.
 
 The key components of this project are:
 - **`game/game_env.py`**: This file is the "bridge" between the NEAT algorithm and the Pac-Man game. It implements a Gym-like environment, handling game state, observations, and reward calculations.

@@ -1,0 +1,50 @@
+\documentclass[11pt]{beamer}
+\usepackage{settings}
+
+% Reduce inter-line spacing globally (affects most text)
+\usepackage{setspace}
+\renewcommand{\baselinestretch}{0.97}
+
+\title[NEAT]{\vspace {2em}Pacman-NEAT: \\ Exploring the Power of Evolutionary Algorithms in Game Playing}
+\subtitle{A Case Study with NEAT and Pacman}
+\date{08/07/2025}
+\author{Andrea Spinelli}
+\institute{\vspace{-5em} University of Trieste \hfill \includegraphics[height=1.5cm]{assets/pacman.png}}
+\titlegraphic{\hfill\includegraphics[height=1.5cm]{assets/logo100_orizzontale.pdf}}
+
+\usepackage{xcolor}
+\newcommand{\blue}[1]{\textcolor{blue}{#1}}
+\newcommand{\green}[1]{\textcolor{green!80!black!90!yellow}{#1}}
+\newcommand{\red}[1]{\textcolor{red}{#1}}
+\newcommand{\yellow}[1]{\textcolor{orange!90!yellow}{#1}}
+
+\begin{document}
+
+\maketitle
+
+\begin{frame}{Table of contents}
+  \setbeamertemplate{section in toc}[sections numbered]
+  \tableofcontents%[hideallsubsections]
+\end{frame}
+\input{chapters/ch1}
+\input{chapters/ch2}
+\input{chapters/ch3}
+% \input{chapters/ch4}
+% \input{chapters/ch5}
+
+% ------------------------------- Bibliography? ------------------------------ %
+\begin{frame}[allowframebreaks]{References}
+
+  \bibliography{references}
+  \bibliographystyle{abbrv}
+  
+\end{frame}
+
+% --------------------------------- Question --------------------------------- %
+{\setbeamercolor{palette primary}{fg=white, bg=bluscuro}
+\begin{frame}[standout]
+  \fontsize{18pt}{16pt}\selectfont
+  Thank You!
+\end{frame}
+}
+\end{document}

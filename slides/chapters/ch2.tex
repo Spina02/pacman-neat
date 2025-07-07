@@ -63,9 +63,8 @@
     The final observation vector is the concatenation of the vectorial observation and the minimap observation, for a total of \textbf{90 elements}.
 \end{frame}
 
-% --- Slide 2: How Does Pac-Man "Learn"? ---
 \begin{frame}{How Does Pac-Man "Learn"? The Reward Function}
-	The agent's goal is to maximize its cumulative \textbf{reward}. The design of the reward function—\textit{reward shaping}—is critical to guide its behavior.
+	The agent's goal is to maximize its cumulative \textbf{reward}. The design of the reward function (\textit{reward shaping}) is critical to guide its behavior.
 	\vspace{1em}
 	
 	\textbf{A naive approach is insufficient:}
@@ -80,25 +79,30 @@
 \end{frame}
 
 \begin{frame}{Early Issues: Unintended Behaviors}
-	Initial experiments with complex environments and reward functions led to classic AI failures:
+	Initial experiments with reward functions led to classic AI failures:
+
+	\vspace{1em}
 	
 	\begin{columns}[T]
 		\begin{column}{0.48\textwidth}
 			\textbf{Reward Hacking}
 			
+			\vspace{0.5em}
+
             The agent found loopholes in the reward function. For instance:
                 \begin{itemize}
                     \item If the reward function penalizes being stuck, the agent learns to oscillate between two positions.
-                    \item If there is no cost of life, the agent learns to run in circles.
                 \end{itemize}
 
 		\end{column}
 		\begin{column}{0.48\textwidth}
 			\textbf{Premature Complexity}
+
+			\vspace{0.5em}
+
 			\begin{itemize}
 				\item Starting with the full game was overwhelming.
 				\item The agent couldn't learn basic evasion while also needing to manage power-ups and complex ghost behaviors.
-				\item This led to a very slow or stalled learning process.
 			\end{itemize}
 		\end{column}
 	\end{columns}

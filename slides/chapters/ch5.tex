@@ -1,0 +1,50 @@
+\section{Conclusions}
+
+\begin{frame}{Conclusions}
+	\begin{itemize}
+		\item \textbf{NEAT is highly effective:} 
+		
+		The NEAT algorithm allowed us to evolve neural networks that performed well at playing Pac-Man.
+		\vspace{1em}
+		\item \textbf{Gradual training leads to better results:}
+		
+		Training the agent in stages encouraged it to learn more advanced behaviors, such as avoiding ghosts and collecting pellets efficiently. These skills did not emerge when trying to train everything at once.
+		\vspace{1em}
+		\item \textbf{The agent's view limits its performance:} 
+		
+		Since the agent could only see a small part of the maze at a time, it often made the same mistakes in certain locations.
+	\end{itemize}
+\end{frame}
+
+\begin{frame}{Future Work}
+	To achieve a perfect score and consistently clear the level, several enhancements could be explored:
+	
+	\begin{enumerate}
+		\setlength\itemindent{-0.5em}
+		\item \textbf{Enhanced Observation Space:}
+		\begin{itemize}
+			\setlength\itemindent{-1.5em}
+			\item Increase the minimap size (e.g. 16x16) for a wider field of view.
+			\item Provide the agent the entire game grid (increase complexity).
+		\end{itemize}
+
+		\vspace{0.5em}
+
+		\item \textbf{Headless, Pygame-Independent Environment:}
+		
+		Rewrite the game loop in pure Python/NumPy to remove the Pygame overhead; this would drastically speed up training.
+		
+		\vspace{0.5em}
+
+		\item \textbf{More Granular Curriculum:}
+		
+		Introduce stages where ghost speed or intelligence gradually increases over generations.
+
+		\vspace{0.5em}
+
+		\item \textbf{Stochasticity:}
+		
+		Introduce stochastic elements by randomizing the agent's starting positions. This will encourage the model to develop strategies that are effective throughout the entire maze, rather than favoring specific areas.
+
+	\end{enumerate}
+\end{frame}
